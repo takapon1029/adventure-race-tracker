@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>アドベンチャーレース トラッカー</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; color: #eee; height: 100vh; display: flex; flex-direction: column; }
+
+#header {
+  background: #16213e;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid #0f3460;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+#header h1 { font-size: 16px; font-weight: 700; color: #e94560; white-space: nowrap; }
+
+#load-btn {
+  background: #e94560;
+  color: white;
+  border: none;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+}
+#load-btn:hover { background: #c73652; }
+#file-input { display: none; }
+
+#file-list { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
+.file-tag {
+  background: #0f3460;
+  border-radius: 12px;
+  padding: 2px 10px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.file-tag .remove { cursor: pointer; opacity: 0.6; font-size: 14px; }
+.file-tag .remove:hover { opacity: 1; }
+
+#map { flex: 1; }
+
+#timeline {
+  background: #16213e;
+  padding: 10px 16px;
+  border-top: 1px solid #0f3460;
+  flex-shrink: 0;
+}
+#time-display {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+#current-time { font-size: 15px; font-weight: bold; color: #e94560; }
+#controls { display: flex; align-items: center; gap: 10px; }
+#play-btn {
+  background: #0f3460;
+  border: none;
+  color: white;
+  width: 32px; height: 32px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+#play-btn:hover { background: #e94560; }
+#speed-select {
+  background: #0f3460;
+  border: none;
+  color: white;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+#slider { flex: 1; accent-color: #e94560; height: 4px; cursor: pointer; }
+
+#team-legend {
+  position: absolute;
+  top: 10px; right: 10px;
+  background: rgba(22,33,62,0.92);
+  border-radius: 6px;
+  padding: 10px 14px;
+  z-index: 1000;
+  min-width: 140px;
+  font-size: 13px;
+  border: 1px solid #0f3460;
+}
+#team-legend h3 { font-size: 12px; color: #aaa; margin-bottom: 8px; }
+.legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.legend-line { width: 24px; height: 3px; border-radius: 2px; }
+
+#drop-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(233,69,96,0.15);
+  border: 3px dashed #e94560;
+  z-index: 9999;
+  align-items: center; justify-content: center;
+  font-size: 24px; color: #e94560;
+  pointer-events: none;
+}
+#drop-overlay.active { display: flex; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>🏔 AR Tracker</h1>
+  <button id="load-btn" onclick="document.getElementById('file-input').click()">GPXを読み込む</button>
+  <input type="file" id="file-input" accept=".gpx" multiple>
+  <div id="file-list"></div>
+</div>
+
+<div id="map"></div>
+
+<div id="timeline">
+  <div id="time-display">
+    <span id="time-range">GPXファイルを読み込むとタイムラインが表示されます</span>
+    <span id="current-time">--:--:--</span>
+  </div>
+  <div id="controls">
+    <button id="play-btn" title="再生/停止">▶</button>
+    <select id="speed-select" title="再生速度">
+      <option value="1">×1</option>
+      <option value="10">×10</option>
+      <option value="60">×60</option>
+      <option value="300" selected>×300</option>
+      <option value="600">×600</option>
+      <option value="3600">×3600</option>
+    </select>
+    <input type="range" id="slider" min="0" max="1000" value="0" step="1">
+  </div>
+</div>
+
+<div id="team-legend"><h3>チーム</h3></div>
+<div id="drop-overlay">GPXファイルをドロップ</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ---- Map ----
+const map = L.map('map', { zoomControl: true }).setView([36, 138], 10);
+L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
+  attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院</a>',
+  maxZoom: 18
+}).addTo(map);
+
+// ---- Constants ----
+const TEAM_COLORS = [
+  '#00d4ff','#ff6b35','#7fff00','#ff00ff','#ffd700',
+  '#00ff99','#ff4466','#aa88ff','#ff8800','#00ffcc'
+];
+let colorIndex = 0;
+
+// ---- State ----
+// loadedFiles: [{ id, name, cpLayers:[], teams:[{color,polyline,markerLayer,points}] }]
+let loadedFiles = [];
+let globalMin = null, globalMax = null;
+let currentTime = null;
+let playing = false, animFrameId = null, lastRealTime = null;
+
+// ---- GPX Parsing ----
+// Returns { cpPoints:[{lat,lng,name}], tracks:[{name, points:[{lat,lng,time}]}] }
+function parseGPX(text) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(text, 'application/xml');
+
+  const cpPoints = [];
+
+  // namespace-safe helpers
+  const getEls = (parent, tag) => Array.from(parent.getElementsByTagNameNS('*', tag));
+  const getText = (parent, tag) => {
+    const el = parent.getElementsByTagNameNS('*', tag)[0];
+    return el ? el.textContent.trim() : '';
+  };
+
+  // wpt → CP
+  getEls(doc, 'wpt').forEach(el => {
+    const lat = parseFloat(el.getAttribute('lat'));
+    const lng = parseFloat(el.getAttribute('lon'));
+    if (isNaN(lat) || isNaN(lng)) return;
+    // Kashmir 3D uses <kashmir3d:ident> for waypoint name
+    const name = getText(el, 'ident') || getText(el, 'name') || getText(el, 'desc') || getText(el, 'cmt') || '';
+    cpPoints.push({ lat, lng, name });
+  });
+
+  // rte/rtept → CP
+  getEls(doc, 'rte').forEach(rte => {
+    getEls(rte, 'rtept').forEach(el => {
+      const lat = parseFloat(el.getAttribute('lat'));
+      const lng = parseFloat(el.getAttribute('lon'));
+      if (isNaN(lat) || isNaN(lng)) return;
+      const name = getText(el, 'name') || getText(el, 'desc') || getText(el, 'cmt') || '';
+      cpPoints.push({ lat, lng, name });
+    });
+  });
+
+  // trk → team tracks
+  const tracks = [];
+  getEls(doc, 'trk').forEach(trk => {
+    const trkName = getText(trk, 'name') || '';
+    const points = [];
+    getEls(trk, 'trkpt').forEach(pt => {
+      const lat = parseFloat(pt.getAttribute('lat'));
+      const lng = parseFloat(pt.getAttribute('lon'));
+      if (isNaN(lat) || isNaN(lng)) return;
+      const timeEl = pt.getElementsByTagNameNS('*', 'time')[0];
+      const time = timeEl ? new Date(timeEl.textContent) : null;
+      points.push({ lat, lng, time });
+    });
+    if (points.length > 0) tracks.push({ name: trkName, points });
+  });
+
+  // fallback: if no trk but has wpt with time → treat as single track too
+  // (some devices output only wpt with timestamps)
+  if (tracks.length === 0 && cpPoints.length > 0 && cpPoints.every(p => false)) {
+    // no-op, keep CPs as CPs
+  }
+
+  return { cpPoints, tracks };
+}
+
+// ---- CP Rendering ----
+function createCPMarker(pt) {
+  const group = L.layerGroup();
+  L.circleMarker([pt.lat, pt.lng], {
+    radius: 10,
+    color: 'red',
+    weight: 2,
+    fillColor: 'red',
+    fillOpacity: 0.35,
+    opacity: 0.9,
+  }).addTo(group);
+  if (pt.name) {
+    L.marker([pt.lat, pt.lng], {
+      icon: L.divIcon({
+        className: '',
+        html: `<div style="position:absolute;transform:translate(12px,-50%);background:rgba(22,33,62,0.85);color:#fff;padding:2px 7px;border-radius:3px;font-size:12px;white-space:nowrap;border:1px solid red;pointer-events:none">${pt.name}</div>`,
+        iconSize: [0, 0],
+        iconAnchor: [0, 0]
+      })
+    }).addTo(group);
+  }
+  return group;
+}
+
+// ---- Load a file's parsed data ----
+function addParsedFile(filename, parsed) {
+  const fileId = Date.now() + Math.random();
+  const entry = { id: fileId, name: filename.replace(/\.gpx$/i, ''), cpLayers: [], teams: [] };
+
+  // CPs
+  parsed.cpPoints.forEach(pt => {
+    const layer = createCPMarker(pt);
+    layer.addTo(map);
+    entry.cpLayers.push(layer);
+  });
+
+  // Tracks → teams
+  parsed.tracks.forEach((trk, i) => {
+    const color = TEAM_COLORS[colorIndex % TEAM_COLORS.length];
+    colorIndex++;
+    const polyline = L.polyline([], { color, weight: 3, opacity: 0.85 }).addTo(map);
+    const markerLayer = L.circleMarker([0, 0], {
+      radius: 7, color: 'white', fillColor: color, fillOpacity: 1, weight: 2
+    });
+    const teamName = trk.name || (parsed.tracks.length === 1 ? entry.name : `${entry.name} #${i+1}`);
+    entry.teams.push({ name: teamName, color, points: trk.points, polyline, markerLayer });
+  });
+
+  loadedFiles.push(entry);
+  recalcTimeRange();
+  updateLegend();
+  updateFileList();
+
+  const allPts = loadedFiles.flatMap(f => [
+    ...f.cpLayers.flatMap(() => []),
+    ...f.teams.flatMap(t => t.points.map(p => [p.lat, p.lng]))
+  ]);
+  // Collect all lat/lng for bounds
+  const bounds = [];
+  loadedFiles.forEach(f => {
+    f.teams.forEach(t => t.points.forEach(p => bounds.push([p.lat, p.lng])));
+    // CP positions from layers - we store them on entry for bounds
+  });
+  // Also store cp positions for bounds
+  parsed.cpPoints.forEach(p => bounds.push([p.lat, p.lng]));
+
+  if (bounds.length > 0) map.fitBounds(bounds, { padding: [30, 30] });
+  renderAtTime(currentTime);
+}
+
+function removeFile(fileId) {
+  const idx = loadedFiles.findIndex(f => f.id === fileId);
+  if (idx === -1) return;
+  const f = loadedFiles[idx];
+  f.cpLayers.forEach(l => map.removeLayer(l));
+  f.teams.forEach(t => {
+    map.removeLayer(t.polyline);
+    if (map.hasLayer(t.markerLayer)) map.removeLayer(t.markerLayer);
+  });
+  loadedFiles.splice(idx, 1);
+  recalcTimeRange();
+  updateLegend();
+  updateFileList();
+  renderAtTime(currentTime);
+}
+
+// ---- Time range ----
+function recalcTimeRange() {
+  globalMin = null; globalMax = null;
+  loadedFiles.forEach(f => f.teams.forEach(t => t.points.forEach(p => {
+    if (!p.time || isNaN(p.time)) return;
+    if (!globalMin || p.time < globalMin) globalMin = p.time;
+    if (!globalMax || p.time > globalMax) globalMax = p.time;
+  })));
+  if (globalMin && globalMax) {
+    currentTime = currentTime
+      ? new Date(Math.min(Math.max(+currentTime, +globalMin), +globalMax))
+      : new Date(globalMin);
+    document.getElementById('time-range').textContent = `${fmt(globalMin)} 〜 ${fmt(globalMax)}`;
+    document.getElementById('slider').value = ((currentTime - globalMin) / (globalMax - globalMin)) * 1000;
+  } else {
+    currentTime = null;
+    document.getElementById('time-range').textContent = 'GPXファイルを読み込むとタイムラインが表示されます';
+    document.getElementById('current-time').textContent = '--:--:--';
+  }
+}
+
+function fmt(d) {
+  if (!d) return '--';
+  return d.toLocaleString('ja-JP', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+}
+
+// ---- Render at time ----
+function renderAtTime(t) {
+  if (!t || !globalMin || !globalMax) return;
+  document.getElementById('current-time').textContent = fmt(t);
+  loadedFiles.forEach(f => f.teams.forEach(team => {
+    const pts = team.points.filter(p => p.time && !isNaN(p.time) && p.time <= t);
+    if (pts.length === 0) {
+      team.polyline.setLatLngs([]);
+      if (map.hasLayer(team.markerLayer)) map.removeLayer(team.markerLayer);
+      return;
+    }
+    team.polyline.setLatLngs(pts.map(p => [p.lat, p.lng]));
+    const last = pts[pts.length - 1];
+    team.markerLayer.setLatLng([last.lat, last.lng]);
+    if (!map.hasLayer(team.markerLayer)) team.markerLayer.addTo(map);
+  }));
+}
+
+// ---- Playback ----
+function startPlay() {
+  if (!globalMin || !globalMax) return;
+  playing = true;
+  document.getElementById('play-btn').textContent = '⏸';
+  lastRealTime = performance.now();
+  function tick() {
+    if (!playing) return;
+    const now = performance.now();
+    const delta = (now - lastRealTime) / 1000;
+    lastRealTime = now;
+    const speed = parseInt(document.getElementById('speed-select').value);
+    currentTime = new Date(currentTime.getTime() + delta * speed * 1000);
+    if (currentTime >= globalMax) {
+      currentTime = new Date(globalMax);
+      playing = false;
+      document.getElementById('play-btn').textContent = '▶';
+    }
+    document.getElementById('slider').value = ((currentTime - globalMin) / (globalMax - globalMin)) * 1000;
+    renderAtTime(currentTime);
+    if (playing) animFrameId = requestAnimationFrame(tick);
+  }
+  animFrameId = requestAnimationFrame(tick);
+}
+function stopPlay() {
+  playing = false;
+  document.getElementById('play-btn').textContent = '▶';
+  if (animFrameId) cancelAnimationFrame(animFrameId);
+}
+
+document.getElementById('play-btn').addEventListener('click', () => {
+  if (playing) stopPlay();
+  else {
+    if (currentTime && globalMax && currentTime >= globalMax) currentTime = new Date(globalMin);
+    startPlay();
+  }
+});
+document.getElementById('slider').addEventListener('input', e => {
+  if (!globalMin || !globalMax) return;
+  stopPlay();
+  currentTime = new Date(globalMin.getTime() + (e.target.value / 1000) * (globalMax - globalMin));
+  renderAtTime(currentTime);
+});
+
+// ---- UI ----
+function updateFileList() {
+  const el = document.getElementById('file-list');
+  el.innerHTML = '';
+  loadedFiles.forEach(f => {
+    const tag = document.createElement('div');
+    tag.className = 'file-tag';
+    const dots = f.teams.map(t =>
+      `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${t.color};margin-right:2px"></span>`
+    ).join('');
+    const hasCPs = f.cpLayers.length > 0;
+    tag.innerHTML = `
+      ${hasCPs ? '<span style="color:red;font-size:11px">●</span>' : ''}
+      ${dots}
+      <span>${f.name}</span>
+      <span class="remove" data-id="${f.id}" title="削除">✕</span>
+    `;
+    el.appendChild(tag);
+  });
+  el.querySelectorAll('.remove').forEach(btn => {
+    btn.addEventListener('click', () => removeFile(parseFloat(btn.dataset.id)));
+  });
+}
+
+function updateLegend() {
+  const el = document.getElementById('team-legend');
+  el.innerHTML = '<h3>チーム</h3>';
+  const allTeams = loadedFiles.flatMap(f => f.teams);
+  if (allTeams.length === 0) { el.innerHTML += '<div style="color:#666;font-size:12px">なし</div>'; return; }
+  allTeams.forEach(t => {
+    const item = document.createElement('div');
+    item.className = 'legend-item';
+    item.innerHTML = `<div class="legend-line" style="background:${t.color}"></div><span>${t.name}</span>`;
+    el.appendChild(item);
+  });
+}
+
+// ---- File loading ----
+function loadFiles(files) {
+  Array.from(files).forEach(file => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const parsed = parseGPX(e.target.result);
+      if (parsed.cpPoints.length === 0 && parsed.tracks.length === 0) {
+        alert(`${file.name}: 有効なポイントが見つかりませんでした`);
+        return;
+      }
+      addParsedFile(file.name, parsed);
+    };
+    reader.readAsText(file);
+  });
+}
+
+document.getElementById('file-input').addEventListener('change', e => { loadFiles(e.target.files); e.target.value = ''; });
+
+document.addEventListener('dragover', e => { e.preventDefault(); document.getElementById('drop-overlay').classList.add('active'); });
+document.addEventListener('dragleave', e => { if (!e.relatedTarget) document.getElementById('drop-overlay').classList.remove('active'); });
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  document.getElementById('drop-overlay').classList.remove('active');
+  const gpx = Array.from(e.dataTransfer.files).filter(f => f.name.toLowerCase().endsWith('.gpx'));
+  if (gpx.length > 0) loadFiles(gpx);
+});
+
+// ---- Demo data ----
+function loadDemoData() {
+  const base = new Date('2025-06-01T06:00:00Z');
+  const cpPoints = [
+    { lat: 35.680, lng: 138.550, name: 'START' },
+    { lat: 35.700, lng: 138.580, name: 'CP1' },
+    { lat: 35.720, lng: 138.560, name: 'CP2' },
+    { lat: 35.710, lng: 138.530, name: 'CP3' },
+    { lat: 35.690, lng: 138.510, name: 'FINISH' },
+  ];
+  const teamDefs = ['Team Alpha', 'Team Beta', 'Team Gamma'];
+  const tracks = teamDefs.map((name, ti) => {
+    const points = [];
+    for (let i = 0; i < cpPoints.length - 1; i++) {
+      const steps = 30 + Math.floor(Math.random() * 20);
+      for (let s = 0; s <= steps; s++) {
+        const r = s / steps;
+        const j = 0.002;
+        points.push({
+          lat: cpPoints[i].lat + (cpPoints[i+1].lat - cpPoints[i].lat) * r + (Math.random()-0.5)*j,
+          lng: cpPoints[i].lng + (cpPoints[i+1].lng - cpPoints[i].lng) * r + (Math.random()-0.5)*j,
+          time: new Date(base.getTime() + (ti * 600 + (i * 35 + s) * 180 + Math.random()*60) * 1000)
+        });
+      }
+    }
+    return { name, points };
+  });
+
+  addParsedFile('Demo.gpx', { cpPoints, tracks });
+}
+
+loadDemoData();
+</script>
+</body>
+</html>
