@@ -47,7 +47,7 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
 .file-tag .remove { cursor: pointer; opacity: 0.6; font-size: 14px; }
 .file-tag .remove:hover { opacity: 1; }
 
-#map { flex: 1; }
+#map { flex: 1; position: relative; }
 
 #timeline {
   background: #16213e;
@@ -89,6 +89,7 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
 }
 #slider { flex: 1; accent-color: #e94560; height: 4px; cursor: pointer; }
 
+/* 右上：チームリスト凡例 */
 #team-legend {
   position: absolute;
   top: 10px; right: 10px;
@@ -103,6 +104,33 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
 #team-legend h3 { font-size: 12px; color: #aaa; margin-bottom: 8px; }
 .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
 .legend-line { width: 24px; height: 3px; border-radius: 2px; }
+
+/* 左下：標高パネル */
+#elev-panel {
+  position: absolute;
+  bottom: 10px; left: 10px;
+  background: rgba(22,33,62,0.92);
+  border-radius: 6px;
+  padding: 10px 14px;
+  z-index: 1000;
+  font-size: 12px;
+  border: 1px solid #0f3460;
+  min-width: 180px;
+  display: none;
+}
+#elev-panel h3 { font-size: 11px; color: #aaa; margin-bottom: 8px; letter-spacing: 0.05em; }
+.elev-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+  line-height: 1.4;
+}
+.elev-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.elev-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.elev-vals { text-align: right; white-space: nowrap; color: #ccc; }
+.elev-vals span { color: #fff; font-weight: 600; }
+.elev-vals .gain { color: #7fff00; }
 
 #drop-overlay {
   display: none;
@@ -126,7 +154,12 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
   <div id="file-list"></div>
 </div>
 
-<div id="map"></div>
+<div id="map">
+  <div id="elev-panel">
+    <h3>▲ 標高 / 累積獲得標高</h3>
+    <div id="elev-rows"></div>
+  </div>
+</div>
 
 <div id="timeline">
   <div id="time-display">
@@ -167,21 +200,17 @@ const TEAM_COLORS = [
 let colorIndex = 0;
 
 // ---- State ----
-// loadedFiles: [{ id, name, cpLayers:[], teams:[{color,polyline,markerLayer,points}] }]
 let loadedFiles = [];
 let globalMin = null, globalMax = null;
 let currentTime = null;
 let playing = false, animFrameId = null, lastRealTime = null;
 
 // ---- GPX Parsing ----
-// Returns { cpPoints:[{lat,lng,name}], tracks:[{name, points:[{lat,lng,time}]}] }
 function parseGPX(text) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(text, 'application/xml');
-
   const cpPoints = [];
 
-  // namespace-safe helpers
   const getEls = (parent, tag) => Array.from(parent.getElementsByTagNameNS('*', tag));
   const getText = (parent, tag) => {
     const el = parent.getElementsByTagNameNS('*', tag)[0];
@@ -193,7 +222,6 @@ function parseGPX(text) {
     const lat = parseFloat(el.getAttribute('lat'));
     const lng = parseFloat(el.getAttribute('lon'));
     if (isNaN(lat) || isNaN(lng)) return;
-    // Kashmir 3D uses <kashmir3d:ident> for waypoint name
     const name = getText(el, 'ident') || getText(el, 'name') || getText(el, 'desc') || getText(el, 'cmt') || '';
     cpPoints.push({ lat, lng, name });
   });
@@ -204,12 +232,12 @@ function parseGPX(text) {
       const lat = parseFloat(el.getAttribute('lat'));
       const lng = parseFloat(el.getAttribute('lon'));
       if (isNaN(lat) || isNaN(lng)) return;
-      const name = getText(el, 'name') || getText(el, 'desc') || getText(el, 'cmt') || '';
+      const name = getText(el, 'ident') || getText(el, 'name') || getText(el, 'desc') || getText(el, 'cmt') || '';
       cpPoints.push({ lat, lng, name });
     });
   });
 
-  // trk → team tracks
+  // trk → team tracks (ele も取得)
   const tracks = [];
   getEls(doc, 'trk').forEach(trk => {
     const trkName = getText(trk, 'name') || '';
@@ -219,19 +247,34 @@ function parseGPX(text) {
       const lng = parseFloat(pt.getAttribute('lon'));
       if (isNaN(lat) || isNaN(lng)) return;
       const timeEl = pt.getElementsByTagNameNS('*', 'time')[0];
+      const eleEl  = pt.getElementsByTagNameNS('*', 'ele')[0];
       const time = timeEl ? new Date(timeEl.textContent) : null;
-      points.push({ lat, lng, time });
+      const ele  = eleEl  ? parseFloat(eleEl.textContent) : null;
+      points.push({ lat, lng, time, ele });
     });
     if (points.length > 0) tracks.push({ name: trkName, points });
   });
 
-  // fallback: if no trk but has wpt with time → treat as single track too
-  // (some devices output only wpt with timestamps)
-  if (tracks.length === 0 && cpPoints.length > 0 && cpPoints.every(p => false)) {
-    // no-op, keep CPs as CPs
-  }
-
   return { cpPoints, tracks };
+}
+
+// ---- 累積獲得標高を計算（ノイズフィルタ付き） ----
+function calcElevGain(points, threshold = 5) {
+  // threshold[m] 以上の上昇のみカウント
+  let gain = 0;
+  let base = null;
+  for (const p of points) {
+    if (p.ele == null || isNaN(p.ele)) continue;
+    if (base === null) { base = p.ele; continue; }
+    const diff = p.ele - base;
+    if (diff >= threshold) {
+      gain += diff;
+      base = p.ele;
+    } else if (diff < 0) {
+      base = p.ele;
+    }
+  }
+  return Math.round(gain);
 }
 
 // ---- CP Rendering ----
@@ -258,19 +301,17 @@ function createCPMarker(pt) {
   return group;
 }
 
-// ---- Load a file's parsed data ----
+// ---- Load file ----
 function addParsedFile(filename, parsed) {
   const fileId = Date.now() + Math.random();
   const entry = { id: fileId, name: filename.replace(/\.gpx$/i, ''), cpLayers: [], teams: [] };
 
-  // CPs
   parsed.cpPoints.forEach(pt => {
     const layer = createCPMarker(pt);
     layer.addTo(map);
     entry.cpLayers.push(layer);
   });
 
-  // Tracks → teams
   parsed.tracks.forEach((trk, i) => {
     const color = TEAM_COLORS[colorIndex % TEAM_COLORS.length];
     colorIndex++;
@@ -279,7 +320,8 @@ function addParsedFile(filename, parsed) {
       radius: 7, color: 'white', fillColor: color, fillOpacity: 1, weight: 2
     });
     const teamName = trk.name || (parsed.tracks.length === 1 ? entry.name : `${entry.name} #${i+1}`);
-    entry.teams.push({ name: teamName, color, points: trk.points, polyline, markerLayer });
+    const hasEle = trk.points.some(p => p.ele != null && !isNaN(p.ele));
+    entry.teams.push({ name: teamName, color, points: trk.points, polyline, markerLayer, hasEle });
   });
 
   loadedFiles.push(entry);
@@ -287,19 +329,9 @@ function addParsedFile(filename, parsed) {
   updateLegend();
   updateFileList();
 
-  const allPts = loadedFiles.flatMap(f => [
-    ...f.cpLayers.flatMap(() => []),
-    ...f.teams.flatMap(t => t.points.map(p => [p.lat, p.lng]))
-  ]);
-  // Collect all lat/lng for bounds
   const bounds = [];
-  loadedFiles.forEach(f => {
-    f.teams.forEach(t => t.points.forEach(p => bounds.push([p.lat, p.lng])));
-    // CP positions from layers - we store them on entry for bounds
-  });
-  // Also store cp positions for bounds
+  loadedFiles.forEach(f => f.teams.forEach(t => t.points.forEach(p => bounds.push([p.lat, p.lng]))));
   parsed.cpPoints.forEach(p => bounds.push([p.lat, p.lng]));
-
   if (bounds.length > 0) map.fitBounds(bounds, { padding: [30, 30] });
   renderAtTime(currentTime);
 }
@@ -350,18 +382,50 @@ function fmt(d) {
 function renderAtTime(t) {
   if (!t || !globalMin || !globalMax) return;
   document.getElementById('current-time').textContent = fmt(t);
+
+  const elevData = []; // { name, color, ele, gain, hasEle }
+
   loadedFiles.forEach(f => f.teams.forEach(team => {
     const pts = team.points.filter(p => p.time && !isNaN(p.time) && p.time <= t);
     if (pts.length === 0) {
       team.polyline.setLatLngs([]);
       if (map.hasLayer(team.markerLayer)) map.removeLayer(team.markerLayer);
-      return;
+    } else {
+      team.polyline.setLatLngs(pts.map(p => [p.lat, p.lng]));
+      const last = pts[pts.length - 1];
+      team.markerLayer.setLatLng([last.lat, last.lng]);
+      if (!map.hasLayer(team.markerLayer)) team.markerLayer.addTo(map);
     }
-    team.polyline.setLatLngs(pts.map(p => [p.lat, p.lng]));
-    const last = pts[pts.length - 1];
-    team.markerLayer.setLatLng([last.lat, last.lng]);
-    if (!map.hasLayer(team.markerLayer)) team.markerLayer.addTo(map);
+
+    if (team.hasEle) {
+      const currentEle = pts.length > 0 ? pts[pts.length - 1].ele : null;
+      const gain = pts.length > 0 ? calcElevGain(pts) : 0;
+      elevData.push({ name: team.name, color: team.color, ele: currentEle, gain });
+    }
   }));
+
+  updateElevPanel(elevData);
+}
+
+// ---- 標高パネル更新 ----
+function updateElevPanel(data) {
+  const panel = document.getElementById('elev-panel');
+  const rows  = document.getElementById('elev-rows');
+  if (data.length === 0) { panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+  rows.innerHTML = '';
+  data.forEach(d => {
+    const row = document.createElement('div');
+    row.className = 'elev-row';
+    const eleStr  = d.ele != null && !isNaN(d.ele) ? `<span>${Math.round(d.ele)}</span>m` : '<span>--</span>';
+    const gainStr = `<span class="gain">+${d.gain}</span>m`;
+    row.innerHTML = `
+      <div class="elev-dot" style="background:${d.color}"></div>
+      <div class="elev-name">${d.name}</div>
+      <div class="elev-vals">${eleStr} &nbsp; ${gainStr}</div>
+    `;
+    rows.appendChild(row);
+  });
 }
 
 // ---- Playback ----
@@ -462,7 +526,6 @@ function loadFiles(files) {
 }
 
 document.getElementById('file-input').addEventListener('change', e => { loadFiles(e.target.files); e.target.value = ''; });
-
 document.addEventListener('dragover', e => { e.preventDefault(); document.getElementById('drop-overlay').classList.add('active'); });
 document.addEventListener('dragleave', e => { if (!e.relatedTarget) document.getElementById('drop-overlay').classList.remove('active'); });
 document.addEventListener('drop', e => {
@@ -472,7 +535,7 @@ document.addEventListener('drop', e => {
   if (gpx.length > 0) loadFiles(gpx);
 });
 
-// ---- Demo data ----
+// ---- Demo data (標高付き) ----
 function loadDemoData() {
   const base = new Date('2025-06-01T06:00:00Z');
   const cpPoints = [
@@ -482,6 +545,8 @@ function loadDemoData() {
     { lat: 35.710, lng: 138.530, name: 'CP3' },
     { lat: 35.690, lng: 138.510, name: 'FINISH' },
   ];
+  // デモ用の標高プロファイル（各CP間）
+  const eleProfile = [800, 950, 1100, 1020, 880];
   const teamDefs = ['Team Alpha', 'Team Beta', 'Team Gamma'];
   const tracks = teamDefs.map((name, ti) => {
     const points = [];
@@ -490,16 +555,18 @@ function loadDemoData() {
       for (let s = 0; s <= steps; s++) {
         const r = s / steps;
         const j = 0.002;
+        // 標高は区間で線形補間 + 小ノイズ
+        const ele = eleProfile[i] + (eleProfile[i+1] - eleProfile[i]) * r + (Math.random()-0.5) * 20;
         points.push({
           lat: cpPoints[i].lat + (cpPoints[i+1].lat - cpPoints[i].lat) * r + (Math.random()-0.5)*j,
           lng: cpPoints[i].lng + (cpPoints[i+1].lng - cpPoints[i].lng) * r + (Math.random()-0.5)*j,
-          time: new Date(base.getTime() + (ti * 600 + (i * 35 + s) * 180 + Math.random()*60) * 1000)
+          time: new Date(base.getTime() + (ti * 600 + (i * 35 + s) * 180 + Math.random()*60) * 1000),
+          ele
         });
       }
     }
     return { name, points };
   });
-
   addParsedFile('Demo.gpx', { cpPoints, tracks });
 }
 
