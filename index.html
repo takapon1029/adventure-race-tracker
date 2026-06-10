@@ -25,9 +25,6 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
 #load-btn:hover  { background: #c73652; }
 #mode-btn  { background: #0f3460; border: 1px solid #555; }
 #mode-btn:hover, #mode-btn.active { background: #1a5276; border-color: #3498db; }
-#live-btn  { background: #0f3460; border: 1px solid #555; }
-#live-btn:hover   { background: #1e8449; }
-#live-btn.active  { background: #27ae60; border-color: #2ecc71; animation: pulse-btn 1.5s infinite; }
 #lt360-btn { background: #0f3460; border: 1px solid #555; }
 #lt360-btn:hover  { background: #1565c0; }
 #lt360-btn.active { background: #1976d2; border-color: #42a5f5; animation: pulse-btn 1.5s infinite; }
@@ -77,22 +74,6 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
 .elev-vals { text-align:right; white-space:nowrap; color:#ccc; }
 .elev-vals span { color:#fff; font-weight:600; }
 .elev-vals .gain { color:#7fff00; }
-
-#live-panel {
-  position: absolute; top: 10px; left: 10px;
-  background: rgba(15,22,40,0.92); border-radius: 6px;
-  padding: 10px 14px; z-index: 1000;
-  font-size: 12px; border: 1px solid #27ae60; min-width: 180px; display: none;
-}
-#live-panel h3 { font-size: 11px; color: #2ecc71; margin-bottom: 8px; }
-#live-info { color: #ccc; line-height: 1.7; }
-#live-info b { color: #fff; }
-.live-pulse {
-  display:inline-block; width:10px; height:10px; border-radius:50%;
-  background:#e94560; box-shadow:0 0 0 0 rgba(233,69,96,.7);
-  animation: pulse-dot 1.4s infinite;
-}
-@keyframes pulse-dot { 0%{box-shadow:0 0 0 0 rgba(233,69,96,.7)} 70%{box-shadow:0 0 0 10px rgba(233,69,96,0)} 100%{box-shadow:0 0 0 0 rgba(233,69,96,0)} }
 
 /* LT360 dialog */
 #lt360-dialog {
@@ -150,6 +131,20 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
   font-size: 24px; color: #e94560; pointer-events: none;
 }
 #drop-overlay.active { display: flex; }
+
+/* Team / Pilot popup */
+.leaflet-popup-content-wrapper {
+  background: rgba(12,18,36,0.97) !important;
+  border: 1px solid #0f3460 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.6) !important;
+  color: #eee !important;
+}
+.leaflet-popup-tip { background: rgba(12,18,36,0.97) !important; }
+.leaflet-popup-content { margin: 10px 14px !important; font-size: 13px; }
+.tp-name { font-weight: 700; font-size: 14px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #1a2a4a; }
+.tp-row  { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 4px; color: #aaa; }
+.tp-row b { color: #fff; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -159,7 +154,6 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
   <button id="load-btn" class="hdr-btn" onclick="document.getElementById('file-input').click()">GPXを読み込む</button>
   <input type="file" id="file-input" accept=".gpx" multiple>
   <button id="mode-btn" class="hdr-btn" onclick="toggleMode()">🛰 衛星3D</button>
-  <button id="live-btn" class="hdr-btn" onclick="toggleLive()">📍 ライブ</button>
   <button id="lt360-btn" class="hdr-btn" onclick="toggleLT360Dialog()">🌐 LT360</button>
   <div id="file-list"></div>
 </div>
@@ -167,11 +161,6 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
 <div id="map-wrapper">
   <div id="map2d"></div>
   <div id="map3d"></div>
-
-  <div id="live-panel">
-    <h3><span class="live-pulse"></span> &nbsp; リアルタイム追跡中</h3>
-    <div id="live-info">待機中...</div>
-  </div>
 
   <div id="lt360-panel">
     <h3><span class="lt360-pulse"></span> &nbsp; LiveTrack360 接続中</h3>
@@ -285,17 +274,6 @@ function initMap3D() {
       layout:{ 'text-field':['get','name'], 'text-font':['Open Sans Bold'], 'text-size':13,
                'text-offset':[1.2,0], 'text-anchor':'left', 'text-allow-overlap':true },
       paint:{ 'text-color':'#fff', 'text-halo-color':'rgba(0,0,0,0.8)', 'text-halo-width':2 }
-    });
-
-    // ライブ追跡 source
-    map3d.addSource('live-track-src', { type:'geojson', data:{ type:'Feature', geometry:{ type:'LineString', coordinates:[] } } });
-    map3d.addSource('live-marker-src', { type:'geojson', data:{ type:'FeatureCollection', features:[] } });
-    map3d.addLayer({ id:'live-track', type:'line', source:'live-track-src',
-      layout:{ 'line-cap':'round','line-join':'round' },
-      paint:{ 'line-color':'#e94560', 'line-width':4, 'line-dasharray':[2,1.5] }
-    });
-    map3d.addLayer({ id:'live-marker', type:'circle', source:'live-marker-src',
-      paint:{ 'circle-radius':10, 'circle-color':'#e94560', 'circle-stroke-color':'white', 'circle-stroke-width':3 }
     });
 
     map3dReady = true;
@@ -424,7 +402,9 @@ async function lt360Poll() {
         const uid   = teamUidCounter++;
         const poly  = L.polyline([],{color,weight:3,opacity:0.85}).addTo(map2d);
         const mkr   = L.circleMarker([lat,lng],{radius:7,color:'white',fillColor:color,fillOpacity:1,weight:2});
-        lt360Pilots.set(sn,{name:p.nm||`Pilot ${sn}`, color, sn, uid, points:[], polyline2d:poly, marker2d:mkr, lastD:0});
+        const pilot = {name:p.nm||`Pilot ${sn}`, color, sn, uid, points:[], polyline2d:poly, marker2d:mkr, lastD:0};
+        mkr.bindPopup(()=>lt360PopupHtml(pilot), {maxWidth:260});
+        lt360Pilots.set(sn, pilot);
       }
 
       const pilot = lt360Pilots.get(sn);
@@ -443,6 +423,7 @@ async function lt360Poll() {
         pilot.polyline2d.setLatLngs(pilot.points.map(q=>[q.lat,q.lng]));
         pilot.marker2d.setLatLng([lat,lng]);
         if(!map2d.hasLayer(pilot.marker2d)) pilot.marker2d.addTo(map2d);
+        if(pilot.marker2d.isPopupOpen()) pilot.marker2d.setPopupContent(lt360PopupHtml(pilot));
       }
 
       // 3D マップ更新
@@ -506,13 +487,44 @@ function setLT360Status(msg, cls) {
 }
 
 // ================================================================
-// LIVE TRACKING STATE
+// POPUP HELPERS
 // ================================================================
-let liveActive    = false;
-let liveWatchId   = null;
-let livePoints    = [];   // {lat, lng, time, ele, acc}
-let livePolyline2D  = null;
-let liveMarker2D    = null;
+function fmtDur(ms) {
+  if(ms<=0) return '0s';
+  const s=Math.floor(ms/1000), h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60;
+  return h>0 ? `${h}h ${m}m` : m>0 ? `${m}m ${sec}s` : `${sec}s`;
+}
+
+function teamPopupHtml(team, pts, currentT) {
+  const last = pts.length>0 ? pts[pts.length-1] : null;
+  const ele  = last?.ele!=null&&!isNaN(last.ele) ? `${Math.round(last.ele)} m` : '--';
+  const gain = pts.length>0 ? `+${calcElevGain(pts)} m` : '--';
+  const spd  = last?.spd!=null ? `${(last.spd*3.6).toFixed(1)} km/h` : '--';
+  const elapsed = last?.time&&pts[0]?.time ? fmtDur(last.time - pts[0].time) : '--';
+  const loc  = last ? `${last.lat.toFixed(5)}, ${last.lng.toFixed(5)}` : '--';
+  return `<div class="tp-name" style="color:${team.color}">${team.name}</div>`
+    + row('時刻', fmt(last?.time))
+    + row('経過', elapsed)
+    + row('標高', ele)
+    + (pts.some(p=>p.ele!=null) ? row('累積獲得', gain) : '')
+    + row('位置', loc);
+}
+
+function lt360PopupHtml(pilot) {
+  const last = pilot.points.length>0 ? pilot.points[pilot.points.length-1] : null;
+  const ele  = last?.ele!=null ? `${Math.round(last.ele)} m` : '--';
+  const spd  = last?.spd!=null ? `${parseFloat(last.spd).toFixed(1)} km/h` : '--';
+  const loc  = last ? `${last.lat.toFixed(5)}, ${last.lng.toFixed(5)}` : '--';
+  return `<div class="tp-name" style="color:${pilot.color}">📡 ${pilot.name}</div>`
+    + row('標高', ele)
+    + row('速度', spd)
+    + row('位置', loc)
+    + row('最終更新', fmt(last?.time));
+}
+
+function row(label, val) {
+  return `<div class="tp-row"><span>${label}</span><b>${val}</b></div>`;
+}
 
 // ================================================================
 // GPX PARSING
@@ -542,7 +554,14 @@ function parseGPX(text) {
       const lat=parseFloat(pt.getAttribute('lat')), lng=parseFloat(pt.getAttribute('lon'));
       if(isNaN(lat)||isNaN(lng)) return;
       const tEl=pt.getElementsByTagNameNS('*','time')[0], eEl=pt.getElementsByTagNameNS('*','ele')[0];
-      points.push({ lat, lng, time:tEl?new Date(tEl.textContent):null, ele:eEl?parseFloat(eEl.textContent):null });
+      const prev = points[points.length-1];
+      const thisTime = tEl?new Date(tEl.textContent):null;
+      let spd = null;
+      if(prev&&prev.time&&thisTime){
+        const dt=(thisTime-prev.time)/1000;
+        if(dt>0){ const dx=Math.sqrt((lat-prev.lat)**2+(lng-prev.lng)**2)*111320; spd=dx/dt; }
+      }
+      points.push({ lat, lng, time:thisTime, ele:eEl?parseFloat(eEl.textContent):null, spd });
     });
     if(points.length>0) tracks.push({ name:trkName, points });
   });
@@ -591,7 +610,9 @@ function addParsedFile(filename, parsed) {
     const markerLayer  = L.circleMarker([0,0],{radius:7,color:'white',fillColor:color,fillOpacity:1,weight:2});
     const teamName     = trk.name||(parsed.tracks.length===1?entry.name:`${entry.name} #${i+1}`);
     const hasEle       = trk.points.some(p=>p.ele!=null&&!isNaN(p.ele));
-    entry.teams.push({ uid, name:teamName, color, points:trk.points, polyline, markerLayer, hasEle });
+    const team         = { uid, name:teamName, color, points:trk.points, polyline, markerLayer, hasEle, visiblePts:[] };
+    markerLayer.bindPopup(()=>teamPopupHtml(team, team.visiblePts, currentTime), {maxWidth:260});
+    entry.teams.push(team);
   });
   loadedFiles.push(entry);
   if(currentMode==='3d'&&map3d&&map3dReady) sync3DFromState();
@@ -693,12 +714,15 @@ function renderAtTime(t) {
   loadedFiles.forEach(f=>f.teams.forEach(team=>{
     const pts=team.points.filter(p=>p.time&&!isNaN(p.time)&&p.time<=t);
     // 2D
+    team.visiblePts = pts;
     if(pts.length===0){ team.polyline.setLatLngs([]); if(map2d.hasLayer(team.markerLayer)) map2d.removeLayer(team.markerLayer); }
     else {
       team.polyline.setLatLngs(pts.map(p=>[p.lat,p.lng]));
       const last=pts[pts.length-1];
       team.markerLayer.setLatLng([last.lat,last.lng]);
       if(!map2d.hasLayer(team.markerLayer)) team.markerLayer.addTo(map2d);
+      // popup が開いていれば内容を更新
+      if(team.markerLayer.isPopupOpen()) team.markerLayer.setPopupContent(teamPopupHtml(team,pts,t));
     }
     // 3D
     if(currentMode==='3d'&&map3d&&map3dReady){
@@ -713,11 +737,6 @@ function renderAtTime(t) {
       elevData.push({name:team.name,color:team.color,ele:last?last.ele:null,gain:pts.length>0?calcElevGain(pts):0});
     }
   }));
-  // ライブの標高もあれば追加
-  if(liveActive&&livePoints.length>0){
-    const last=livePoints[livePoints.length-1];
-    if(last.ele!=null) elevData.push({name:'現在地',color:'#e94560',ele:last.ele,gain:calcElevGain(livePoints)});
-  }
   updateElevPanel(elevData);
 }
 
@@ -733,95 +752,6 @@ function updateElevPanel(data) {
     row.innerHTML=`<div class="elev-dot" style="background:${d.color}"></div><div class="elev-name">${d.name}</div><div class="elev-vals">${d.ele!=null&&!isNaN(d.ele)?`<span>${Math.round(d.ele)}</span>m`:'<span>--</span>'} &nbsp; <span class="gain">+${d.gain}</span>m</div>`;
     rows.appendChild(row);
   });
-}
-
-// ================================================================
-// LIVE TRACKING
-// ================================================================
-function toggleLive() {
-  if(liveActive) stopLive(); else startLive();
-}
-
-function startLive() {
-  if(!navigator.geolocation){ alert('このブラウザはGeolocationに対応していません'); return; }
-  liveActive=true; livePoints=[];
-  document.getElementById('live-btn').classList.add('active');
-  document.getElementById('live-btn').textContent='⏹ ライブ停止';
-  document.getElementById('live-panel').style.display='block';
-  document.getElementById('live-info').textContent='GPS取得中...';
-  document.getElementById('play-btn').disabled=true;
-  document.getElementById('slider').disabled=true;
-
-  // 2D レイヤー
-  livePolyline2D = L.polyline([],{color:'#e94560',weight:4,opacity:0.9,dashArray:'8,4'}).addTo(map2d);
-  liveMarker2D   = L.circleMarker([0,0],{radius:10,color:'white',fillColor:'#e94560',fillOpacity:1,weight:3});
-
-  liveWatchId = navigator.geolocation.watchPosition(pos=>{
-    const {latitude:lat, longitude:lng, altitude:ele, accuracy:acc, speed} = pos.coords;
-    const time = new Date(pos.timestamp);
-    livePoints.push({lat, lng, time, ele:ele??null, acc});
-
-    // 2D更新
-    livePolyline2D.setLatLngs(livePoints.map(p=>[p.lat,p.lng]));
-    liveMarker2D.setLatLng([lat,lng]);
-    if(!map2d.hasLayer(liveMarker2D)) liveMarker2D.addTo(map2d);
-    if(currentMode==='2d') map2d.panTo([lat,lng]);
-
-    // 3D更新
-    if(map3d&&map3dReady){
-      try{
-        if(map3d.getSource('live-track-src'))
-          map3d.getSource('live-track-src').setData({type:'Feature',geometry:{type:'LineString',coordinates:livePoints.length>=2?livePoints.map(p=>[p.lng,p.lat]):[[0,0],[0,0]]}});
-        if(map3d.getSource('live-marker-src'))
-          map3d.getSource('live-marker-src').setData({type:'FeatureCollection',features:[{type:'Feature',geometry:{type:'Point',coordinates:[lng,lat]},properties:{}}]});
-        if(currentMode==='3d') map3d.panTo([lng,lat]);
-      }catch(e){}
-    }
-
-    // 情報パネル更新
-    const spd = speed!=null ? `${(speed*3.6).toFixed(1)} km/h` : '--';
-    const eleStr = ele!=null ? `${Math.round(ele)} m` : '--';
-    document.getElementById('live-info').innerHTML=
-      `<b>緯度</b> ${lat.toFixed(5)}<br><b>経度</b> ${lng.toFixed(5)}<br><b>標高</b> ${eleStr}<br><b>速度</b> ${spd}<br><b>精度</b> ±${Math.round(acc)} m<br><b>時刻</b> ${fmt(time)}`;
-    document.getElementById('current-time').textContent = fmt(time);
-    updateElevPanel(buildElevData(null));
-    updateLegend();
-  }, err=>{
-    document.getElementById('live-info').innerHTML=`<span style="color:#e74c3c">エラー: ${err.message}</span>`;
-  }, { enableHighAccuracy:true, maximumAge:3000, timeout:10000 });
-}
-
-function stopLive() {
-  if(liveWatchId) navigator.geolocation.clearWatch(liveWatchId);
-  liveWatchId=null; liveActive=false;
-  document.getElementById('live-btn').classList.remove('active');
-  document.getElementById('live-btn').textContent='📍 ライブ';
-  document.getElementById('live-panel').style.display='none';
-  document.getElementById('play-btn').disabled=false;
-  document.getElementById('slider').disabled=false;
-  if(livePolyline2D){ map2d.removeLayer(livePolyline2D); livePolyline2D=null; }
-  if(liveMarker2D&&map2d.hasLayer(liveMarker2D)){ map2d.removeLayer(liveMarker2D); liveMarker2D=null; }
-  if(map3d&&map3dReady){
-    try{
-      map3d.getSource('live-track-src')?.setData({type:'Feature',geometry:{type:'LineString',coordinates:[]}});
-      map3d.getSource('live-marker-src')?.setData({type:'FeatureCollection',features:[]});
-    }catch(e){}
-  }
-  updateLegend();
-}
-
-function buildElevData(t) {
-  const elevData=[];
-  if(t) loadedFiles.forEach(f=>f.teams.forEach(team=>{
-    if(!team.hasEle) return;
-    const pts=team.points.filter(p=>p.time&&!isNaN(p.time)&&p.time<=t);
-    if(pts.length>0) elevData.push({name:team.name,color:team.color,ele:pts[pts.length-1].ele,gain:calcElevGain(pts)});
-  }));
-  if(liveActive&&livePoints.length>0){
-    const last=livePoints[livePoints.length-1];
-    if(last.ele!=null) elevData.push({name:'現在地',color:'#e94560',ele:last.ele,gain:calcElevGain(livePoints)});
-  }
-  return elevData;
 }
 
 // ================================================================
@@ -855,7 +785,6 @@ function resetView3D() {
   if(!map3d) return;
   const bounds=[];
   loadedFiles.forEach(f=>{ f.teams.forEach(t=>t.points.forEach(p=>bounds.push([p.lng,p.lat]))); f.cpPoints.forEach(p=>bounds.push([p.lng,p.lat])); });
-  livePoints.forEach(p=>bounds.push([p.lng,p.lat]));
   if(bounds.length===0) return;
   const lngs=bounds.map(b=>b[0]),lats=bounds.map(b=>b[1]);
   map3d.fitBounds([[Math.min(...lngs),Math.min(...lats)],[Math.max(...lngs),Math.max(...lats)]],{padding:60,pitch:55,duration:800});
@@ -901,7 +830,6 @@ function updateFileList(){
 function updateLegend(){
   const el=document.getElementById('team-legend'); el.innerHTML='<h3>チーム</h3>';
   const all=loadedFiles.flatMap(f=>f.teams.map(t=>({...t,fileId:f.id})));
-  if(liveActive) all.push({name:'現在地 ●',color:'#e94560',fileId:null,uid:-1});
   if(lt360Active) lt360Pilots.forEach(p=>all.push({name:`${p.name} 📡`,color:p.color,fileId:null,uid:p.uid,isLT360:true}));
   if(all.length===0){el.innerHTML+='<div style="color:#666;font-size:12px">なし</div>';return;}
   all.forEach(t=>{
