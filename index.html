@@ -183,90 +183,76 @@ L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
 }).addTo(map2d);
 
 // ================================================================
-// 3D MAP (MapLibre GL JS)
+// 3D MAP (MapLibre GL JS) — 遅延初期化（初回3D切り替え時に生成）
 // ================================================================
-const GSI_STYLE = {
-  version: 8,
-  glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
-  sources: {
-    'gsi-std': {
-      type: 'raster',
-      tiles: ['https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png'],
-      tileSize: 256,
-      attribution: '国土地理院',
-      maxzoom: 18
-    },
-    'terrain-src': {
-      type: 'raster-dem',
-      tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
-      tileSize: 256,
-      encoding: 'terrarium',
-      maxzoom: 15
-    }
-  },
-  layers: [
-    { id: 'gsi-layer', type: 'raster', source: 'gsi-std' }
-  ]
-};
-
-const map3d = new maplibregl.Map({
-  container: 'map3d',
-  style: GSI_STYLE,
-  center: [138, 36],
-  zoom: 10,
-  pitch: 60,
-  bearing: 0,
-  antialias: true
-});
-map3d.addControl(new maplibregl.NavigationControl(), 'top-left');
-
+let map3d = null;
 let map3dReady = false;
-map3d.on('load', () => {
-  map3d.setTerrain({ source: 'terrain-src', exaggeration: 1.5 });
-  map3d.setFog({
-    color: 'rgb(186,210,235)',
-    'high-color': 'rgb(36,92,223)',
-    'horizon-blend': 0.04,
-    'space-color': 'rgb(11,11,25)',
-    'star-intensity': 0.6
-  });
-  map3dReady = true;
-  // CP source (static)
-  map3d.addSource('cp-src', {
-    type: 'geojson',
-    data: { type: 'FeatureCollection', features: [] }
-  });
-  map3d.addLayer({
-    id: 'cp-circles', type: 'circle', source: 'cp-src',
-    paint: {
-      'circle-radius': 10,
-      'circle-color': 'rgba(255,0,0,0.35)',
-      'circle-stroke-color': 'red',
-      'circle-stroke-width': 2
-    }
-  });
-  map3d.addLayer({
-    id: 'cp-labels', type: 'symbol', source: 'cp-src',
-    layout: {
-      'text-field': ['get', 'name'],
-      'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-      'text-size': 12,
-      'text-offset': [1.2, 0],
-      'text-anchor': 'left',
-      'text-allow-overlap': true
+let map3dInitialized = false;
+
+function initMap3D() {
+  if (map3dInitialized) return;
+  map3dInitialized = true;
+
+  const c2 = map2d.getCenter();
+  map3d = new maplibregl.Map({
+    container: 'map3d',
+    style: {
+      version: 8,
+      glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
+      sources: {
+        'gsi-std': {
+          type: 'raster',
+          tiles: ['https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png'],
+          tileSize: 256,
+          attribution: '国土地理院',
+          maxzoom: 18
+        },
+        'terrain-src': {
+          type: 'raster-dem',
+          tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+          tileSize: 256,
+          encoding: 'terrarium',
+          maxzoom: 15
+        }
+      },
+      layers: [{ id: 'gsi-layer', type: 'raster', source: 'gsi-std' }]
     },
-    paint: {
-      'text-color': '#ffffff',
-      'text-halo-color': 'rgba(22,33,62,0.85)',
-      'text-halo-width': 2
-    }
+    center: [c2.lng, c2.lat],
+    zoom: map2d.getZoom(),
+    pitch: 60,
+    bearing: 0,
+    antialias: true
   });
-  // If already in 3D mode (fast machine), render now
-  if (currentMode === '3d') {
+
+  map3d.addControl(new maplibregl.NavigationControl(), 'top-left');
+
+  map3d.on('load', () => {
+    map3d.setTerrain({ source: 'terrain-src', exaggeration: 1.5 });
+
+    // CP source
+    map3d.addSource('cp-src', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map3d.addLayer({
+      id: 'cp-circles', type: 'circle', source: 'cp-src',
+      paint: { 'circle-radius': 10, 'circle-color': 'rgba(255,0,0,0.4)', 'circle-stroke-color': 'red', 'circle-stroke-width': 2 }
+    });
+    map3d.addLayer({
+      id: 'cp-labels', type: 'symbol', source: 'cp-src',
+      layout: {
+        'text-field': ['get', 'name'],
+        'text-font': ['Open Sans Bold'],
+        'text-size': 13,
+        'text-offset': [1.2, 0],
+        'text-anchor': 'left',
+        'text-allow-overlap': true
+      },
+      paint: { 'text-color': '#fff', 'text-halo-color': 'rgba(22,33,62,0.9)', 'text-halo-width': 2 }
+    });
+
+    map3dReady = true;
     sync3DFromState();
     renderAtTime(currentTime);
-  }
-});
+  });
+}
 
 // ================================================================
 // STATE
@@ -392,7 +378,7 @@ function addParsedFile(filename, parsed) {
   loadedFiles.push(entry);
 
   // If 3D mode already active, sync 3D sources
-  if (currentMode === '3d' && map3dReady) sync3DFromState();
+  if (currentMode === '3d' && map3d && map3dReady) sync3DFromState();
 
   recalcTimeRange();
   updateLegend();
@@ -406,7 +392,7 @@ function addParsedFile(filename, parsed) {
   if (bounds.length > 0) {
     if (currentMode === '2d') {
       map2d.fitBounds(bounds, { padding: [30,30] });
-    } else if (map3dReady) {
+    } else if (map3d && map3dReady) {
       const lngs = bounds.map(b => b[1]), lats = bounds.map(b => b[0]);
       map3d.fitBounds([[Math.min(...lngs), Math.min(...lats)],[Math.max(...lngs), Math.max(...lats)]], { padding: 40 });
     }
@@ -441,7 +427,7 @@ function removeFile(fileId) {
     remove3DTeamLayers(t.uid);
   });
   loadedFiles.splice(idx, 1);
-  if (currentMode === '3d' && map3dReady) update3DCPs();
+  if (currentMode === '3d' && map3d && map3dReady) update3DCPs();
   recalcTimeRange(); updateLegend(); updateFileList(); renderAtTime(currentTime);
 }
 
@@ -449,39 +435,41 @@ function removeFile(fileId) {
 // 3D SYNC HELPERS
 // ================================================================
 function remove3DTeamLayers(uid) {
-  if (!map3dReady) return;
+  if (!map3d || !map3dReady) return;
   const trackId = `track-${uid}`, markId = `marker-${uid}`;
-  ['track-shadow-'+uid, trackId, markId].forEach(id => {
-    if (map3d.getLayer(id)) map3d.removeLayer(id);
-    if (map3d.getSource(id)) map3d.removeSource(id);
+  [trackId, markId].forEach(id => {
+    try { if (map3d.getLayer(id)) map3d.removeLayer(id); } catch(e){}
+    try { if (map3d.getSource(id)) map3d.removeSource(id); } catch(e){}
   });
 }
 
 function sync3DFromState() {
-  if (!map3dReady) return;
-  // Rebuild CP features
+  if (!map3d || !map3dReady) return;
   update3DCPs();
-  // Ensure all teams have sources
   loadedFiles.forEach(f => f.teams.forEach(t => {
     const trackId = `track-${t.uid}`;
     if (!map3d.getSource(trackId)) {
-      // Add empty source+layer for this team
-      map3d.addSource(trackId, { type:'geojson', data:{ type:'Feature', geometry:{ type:'LineString', coordinates:[] } } });
-      map3d.addLayer({ id:trackId, type:'line', source:trackId,
-        layout:{ 'line-cap':'round', 'line-join':'round' },
-        paint:{ 'line-color':t.color, 'line-width':3.5, 'line-opacity':0.9 }
-      }, 'cp-circles'); // insert below CP layers
-      const markId = `marker-${t.uid}`;
-      map3d.addSource(markId, { type:'geojson', data:{ type:'FeatureCollection', features:[] } });
-      map3d.addLayer({ id:markId, type:'circle', source:markId,
-        paint:{ 'circle-radius':8, 'circle-color':t.color, 'circle-stroke-color':'white', 'circle-stroke-width':2.5 }
-      });
+      try {
+        map3d.addSource(trackId, { type:'geojson', data:{ type:'Feature', geometry:{ type:'LineString', coordinates:[[0,0],[0,0]] } } });
+        // トラック線（CPより下に描画）
+        map3d.addLayer({ id:trackId, type:'line', source:trackId,
+          layout:{ 'line-cap':'round', 'line-join':'round' },
+          paint:{ 'line-color':t.color, 'line-width':3.5, 'line-opacity':0.9 }
+        }, 'cp-circles');
+      } catch(e) { console.warn('track layer add failed:', e); }
+      try {
+        const markId = `marker-${t.uid}`;
+        map3d.addSource(markId, { type:'geojson', data:{ type:'FeatureCollection', features:[] } });
+        map3d.addLayer({ id:markId, type:'circle', source:markId,
+          paint:{ 'circle-radius':8, 'circle-color':t.color, 'circle-stroke-color':'white', 'circle-stroke-width':2.5 }
+        });
+      } catch(e) { console.warn('marker layer add failed:', e); }
     }
   }));
 }
 
 function update3DCPs() {
-  if (!map3dReady || !map3d.getSource('cp-src')) return;
+  if (!map3d || !map3dReady || !map3d.getSource('cp-src')) return;
   const features = [];
   loadedFiles.forEach(f => f.cpPoints.forEach(p => {
     features.push({ type:'Feature', geometry:{ type:'Point', coordinates:[p.lng, p.lat] }, properties:{ name: p.name || '' } });
@@ -538,18 +526,18 @@ function renderAtTime(t) {
     }
 
     // 3D
-    if (currentMode === '3d' && map3dReady) {
+    if (currentMode === '3d' && map3d && map3dReady) {
       const trackId = `track-${team.uid}`, markId = `marker-${team.uid}`;
-      if (map3d.getSource(trackId)) {
-        const coords = pts.map(p => [p.lng, p.lat]);
-        map3d.getSource(trackId).setData({ type:'Feature', geometry:{ type:'LineString', coordinates: coords.length>0?coords:[[0,0],[0,0]] } });
-      }
-      if (map3d.getSource(markId)) {
-        const features = pts.length > 0 ? [{
-          type:'Feature', geometry:{ type:'Point', coordinates:[pts[pts.length-1].lng, pts[pts.length-1].lat] }, properties:{}
-        }] : [];
-        map3d.getSource(markId).setData({ type:'FeatureCollection', features });
-      }
+      try {
+        if (map3d.getSource(trackId)) {
+          const coords = pts.map(p => [p.lng, p.lat]);
+          map3d.getSource(trackId).setData({ type:'Feature', geometry:{ type:'LineString', coordinates: coords.length >= 2 ? coords : [[0,0],[0,0]] } });
+        }
+        if (map3d.getSource(markId)) {
+          const features = pts.length > 0 ? [{ type:'Feature', geometry:{ type:'Point', coordinates:[pts[pts.length-1].lng, pts[pts.length-1].lat] }, properties:{} }] : [];
+          map3d.getSource(markId).setData({ type:'FeatureCollection', features });
+        }
+      } catch(e) {}
     }
 
     // Elevation data
@@ -597,17 +585,21 @@ function switchTo3D() {
   document.getElementById('mode-btn').classList.add('active-3d');
   document.getElementById('tilt-controls').style.display = 'flex';
 
-  // Sync camera 2D→3D
-  const c = map2d.getCenter();
-  map3d.setCenter([c.lng, c.lat]);
-  map3d.setZoom(map2d.getZoom());
-  map3d.setPitch(60);
-
-  map3d.resize();
-
-  if (map3dReady) {
-    sync3DFromState();
-    renderAtTime(currentTime);
+  if (!map3dInitialized) {
+    // 初回：コンテナが表示された状態で初期化（load イベントが確実に発火）
+    initMap3D();
+  } else {
+    // 2回目以降：カメラ同期して再描画
+    if (map3d && map3dReady) {
+      const c = map2d.getCenter();
+      map3d.setCenter([c.lng, c.lat]);
+      map3d.setZoom(map2d.getZoom());
+      map3d.resize();
+      sync3DFromState();
+      renderAtTime(currentTime);
+    } else if (map3d) {
+      map3d.resize();
+    }
   }
 }
 
@@ -633,7 +625,7 @@ function resetView3D() {
     f.teams.forEach(t => t.points.forEach(p => bounds.push([p.lng, p.lat])));
     f.cpPoints.forEach(p => bounds.push([p.lng, p.lat]));
   });
-  if (bounds.length === 0) return;
+  if (bounds.length === 0 || !map3d) return;
   const lngs = bounds.map(b=>b[0]), lats = bounds.map(b=>b[1]);
   map3d.fitBounds([[Math.min(...lngs),Math.min(...lats)],[Math.max(...lngs),Math.max(...lats)]], { padding:60, pitch:60, duration:800 });
 }
