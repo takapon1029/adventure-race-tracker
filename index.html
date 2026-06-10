@@ -145,6 +145,21 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
 }
 .dark-popup .leaflet-popup-close-button { color: #aaa !important; }
 .dark-popup .leaflet-popup-content { margin: 10px 14px; font-size: 13px; min-width: 180px; }
+
+/* MapLibre 3D popup */
+.dark-popup-3d .maplibregl-popup-content {
+  background: rgba(12,18,36,0.97);
+  border: 1px solid #1a3a6a;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.7);
+  color: #eee;
+  padding: 10px 14px;
+  font-size: 13px;
+  min-width: 180px;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+}
+.dark-popup-3d .maplibregl-popup-tip { border-top-color: rgba(12,18,36,0.97) !important; border-bottom-color: rgba(12,18,36,0.97) !important; }
+.dark-popup-3d .maplibregl-popup-close-button { color: #aaa; font-size: 16px; padding: 2px 6px; }
 .tp-name { font-weight: 700; font-size: 14px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #1a2a4a; }
 .tp-row  { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 4px; color: #aaa; }
 .tp-row b { color: #fff; font-weight: 600; }
@@ -352,7 +367,7 @@ async function startLT360() {
   document.getElementById('lt360-panel').style.display = 'block';
 
   await lt360Poll();
-  lt360IntervalId = setInterval(lt360Poll, 10000);
+  lt360IntervalId = setInterval(lt360Poll, 5000);
 }
 
 function stopLT360() {
@@ -440,9 +455,13 @@ async function lt360Poll() {
     });
 
     const cnt = lt360Pilots.size;
-    setLT360Status(`<b>${cnt}</b> 名追跡中 ● ${fmt(now)}`,'ok');
+    // 各パイロットの最終更新からの経過を表示
+    let freshCount = 0;
+    const threshold = Date.now()/1000 - 60; // 60秒以内に更新されたもの
+    lt360Pilots.forEach(p=>{ if(p.lastD > threshold) freshCount++; });
+    setLT360Status(`<b>${cnt}</b> 名 / <b style="color:#2ecc71">${freshCount}</b> 名更新中 ● ${fmt(now)}`,'ok');
     document.getElementById('lt360-panel-info').innerHTML =
-      `グループ <b>${lt360GroupId}</b><br>追跡: <b>${cnt}</b> 名<br>${fmt(now)}`;
+      `グループ <b>${lt360GroupId}</b><br>追跡: <b>${cnt}</b> 名 (<b style="color:#2ecc71">${freshCount}</b> 名アクティブ)<br>${fmt(now)}`;
     updateLegend();
 
     // 初回のみ範囲に合わせる
@@ -467,6 +486,7 @@ async function lt360Poll() {
 }
 
 function lt360Update3D(pilot) {
+  if(!map3d||!map3dReady) return;
   const tid=`track-${pilot.uid}`, mid=`marker-${pilot.uid}`;
   if(!map3d.getSource(tid)){
     try{
@@ -477,15 +497,20 @@ function lt360Update3D(pilot) {
     try{
       map3d.addSource(mid,{type:'geojson',data:{type:'FeatureCollection',features:[]}});
       map3d.addLayer({id:mid,type:'circle',source:mid,
-        paint:{'circle-radius':8,'circle-color':pilot.color,'circle-stroke-color':'white','circle-stroke-width':2.5}});
+        paint:{'circle-radius':9,'circle-color':pilot.color,'circle-stroke-color':'white','circle-stroke-width':2.5}});
+      add3DMarkerPopup(mid, ()=>lt360PopupHtml(pilot));
     }catch(e){}
   }
   try{
     const coords=pilot.points.map(q=>[q.lng,q.lat]);
-    if(map3d.getSource(tid)) map3d.getSource(tid).setData({type:'Feature',geometry:{type:'LineString',coordinates:coords.length>=2?coords:[[0,0],[0,0]]}});
-    if(map3d.getSource(mid)){
+    if(map3d.getSource(tid)) map3d.getSource(tid).setData({
+      type:'Feature', geometry:{type:'LineString', coordinates:coords.length>=2?coords:[[0,0],[0,0]]}
+    });
+    if(map3d.getSource(mid)&&pilot.points.length>0){
       const lp=pilot.points[pilot.points.length-1];
-      map3d.getSource(mid).setData({type:'FeatureCollection',features:[{type:'Feature',geometry:{type:'Point',coordinates:[lp.lng,lp.lat]},properties:{}}]});
+      map3d.getSource(mid).setData({type:'FeatureCollection',
+        features:[{type:'Feature',geometry:{type:'Point',coordinates:[lp.lng,lp.lat]},properties:{name:pilot.name}}]
+      });
     }
   }catch(e){}
 }
@@ -671,6 +696,23 @@ function remove3DTeam(uid) {
     try{ if(map3d.getSource(id)) map3d.removeSource(id); }catch(e){}
   });
 }
+function add3DMarkerPopup(layerId, contentFn) {
+  // MapLibre では同じイベントを複数回登録しないよう try/off してから登録
+  try { map3d.off('click',      layerId); } catch(e){}
+  try { map3d.off('mouseenter', layerId); } catch(e){}
+  try { map3d.off('mouseleave', layerId); } catch(e){}
+  map3d.on('click', layerId, e => {
+    if(!e.features||!e.features.length) return;
+    const coords = e.features[0].geometry.coordinates.slice();
+    new maplibregl.Popup({maxWidth:'300px', className:'dark-popup-3d', closeButton:true})
+      .setLngLat(coords)
+      .setHTML(contentFn())
+      .addTo(map3d);
+  });
+  map3d.on('mouseenter', layerId, () => { map3d.getCanvas().style.cursor='pointer'; });
+  map3d.on('mouseleave', layerId, () => { map3d.getCanvas().style.cursor=''; });
+}
+
 function sync3DFromState() {
   if(!map3d||!map3dReady) return;
   update3DCPs();
@@ -685,10 +727,13 @@ function sync3DFromState() {
       try{
         map3d.addSource(mid,{type:'geojson',data:{type:'FeatureCollection',features:[]}});
         map3d.addLayer({id:mid,type:'circle',source:mid,
-          paint:{'circle-radius':8,'circle-color':t.color,'circle-stroke-color':'white','circle-stroke-width':2.5}});
+          paint:{'circle-radius':9,'circle-color':t.color,'circle-stroke-color':'white','circle-stroke-width':2.5}});
+        add3DMarkerPopup(mid, ()=>teamPopupHtml(t, t.visiblePts, currentTime));
       }catch(e){console.warn(e);}
     }
   }));
+  // LT360 パイロットも同期
+  if(lt360Active) lt360Pilots.forEach(p=>lt360Update3D(p));
 }
 function update3DCPs() {
   if(!map3d||!map3dReady||!map3d.getSource('cp-src')) return;
