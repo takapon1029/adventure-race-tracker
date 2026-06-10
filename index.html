@@ -28,6 +28,9 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
 #live-btn  { background: #0f3460; border: 1px solid #555; }
 #live-btn:hover   { background: #1e8449; }
 #live-btn.active  { background: #27ae60; border-color: #2ecc71; animation: pulse-btn 1.5s infinite; }
+#lt360-btn { background: #0f3460; border: 1px solid #555; }
+#lt360-btn:hover  { background: #1565c0; }
+#lt360-btn.active { background: #1976d2; border-color: #42a5f5; animation: pulse-btn 1.5s infinite; }
 @keyframes pulse-btn { 0%,100%{opacity:1} 50%{opacity:0.7} }
 
 #file-input { display: none; }
@@ -91,6 +94,44 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
 }
 @keyframes pulse-dot { 0%{box-shadow:0 0 0 0 rgba(233,69,96,.7)} 70%{box-shadow:0 0 0 10px rgba(233,69,96,0)} 100%{box-shadow:0 0 0 0 rgba(233,69,96,0)} }
 
+/* LT360 dialog */
+#lt360-dialog {
+  display: none; position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+  background: rgba(15,22,40,0.96); border-radius: 8px; padding: 14px 16px;
+  z-index: 2000; min-width: 320px; max-width: 420px; border: 1px solid #1976d2;
+  font-size: 13px;
+}
+#lt360-dialog h3 { color: #42a5f5; margin-bottom: 10px; font-size: 13px; display:flex; justify-content:space-between; align-items:center; }
+#lt360-dialog label { display:block; color:#aaa; margin-bottom:3px; font-size:12px; }
+#lt360-dialog input[type=text] {
+  width:100%; background:#0a0e1a; border:1px solid #1976d2; border-radius:4px;
+  color:#fff; padding:6px 8px; font-size:13px; margin-bottom:10px;
+}
+#lt360-dialog input[type=text]::placeholder { color:#555; }
+.lt360-row { display:flex; gap:8px; }
+#lt360-start-btn { flex:1; background:#1976d2; border:none; color:white; padding:7px 12px; border-radius:4px; cursor:pointer; font-size:13px; }
+#lt360-start-btn:hover { background:#1565c0; }
+#lt360-start-btn.stop { background:#c0392b; }
+#lt360-start-btn.stop:hover { background:#a93226; }
+#lt360-status { margin-top:8px; font-size:12px; color:#ccc; min-height:18px; }
+#lt360-status.error { color:#e74c3c; }
+#lt360-status.ok { color:#2ecc71; }
+
+#lt360-panel {
+  position: absolute; top: 10px; left: 10px;
+  background: rgba(15,22,40,0.92); border-radius: 6px;
+  padding: 10px 14px; z-index: 1000;
+  font-size: 12px; border: 1px solid #1976d2; min-width: 180px; display: none;
+}
+#lt360-panel h3 { font-size: 11px; color: #42a5f5; margin-bottom: 8px; }
+#lt360-panel-info { color: #ccc; line-height: 1.7; }
+.lt360-pulse {
+  display:inline-block; width:10px; height:10px; border-radius:50%;
+  background:#42a5f5; box-shadow:0 0 0 0 rgba(66,165,245,.7);
+  animation: pulse-dot-blue 1.4s infinite;
+}
+@keyframes pulse-dot-blue { 0%{box-shadow:0 0 0 0 rgba(66,165,245,.7)} 70%{box-shadow:0 0 0 10px rgba(66,165,245,0)} 100%{box-shadow:0 0 0 0 rgba(66,165,245,0)} }
+
 #map3d-controls {
   position: absolute; bottom: 10px; right: 10px;
   z-index: 1000; display: none; gap: 4px; flex-direction: column;
@@ -119,6 +160,7 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
   <input type="file" id="file-input" accept=".gpx" multiple>
   <button id="mode-btn" class="hdr-btn" onclick="toggleMode()">🛰 衛星3D</button>
   <button id="live-btn" class="hdr-btn" onclick="toggleLive()">📍 ライブ</button>
+  <button id="lt360-btn" class="hdr-btn" onclick="toggleLT360Dialog()">🌐 LT360</button>
   <div id="file-list"></div>
 </div>
 
@@ -129,6 +171,23 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
   <div id="live-panel">
     <h3><span class="live-pulse"></span> &nbsp; リアルタイム追跡中</h3>
     <div id="live-info">待機中...</div>
+  </div>
+
+  <div id="lt360-panel">
+    <h3><span class="lt360-pulse"></span> &nbsp; LiveTrack360 接続中</h3>
+    <div id="lt360-panel-info">接続中...</div>
+  </div>
+
+  <div id="lt360-dialog">
+    <h3>🌐 LiveTrack360 連携 <span onclick="closeLT360Dialog()" style="cursor:pointer;opacity:0.6;font-size:16px" title="閉じる">✕</span></h3>
+    <label>グループID または URL</label>
+    <input type="text" id="lt360-input" placeholder="例: 7671 または https://livetrack360.com/livetracking/2d/7671">
+    <label>プロキシURL（CORS回避用・省略可）</label>
+    <input type="text" id="lt360-proxy" placeholder="例: http://localhost:8766/">
+    <div class="lt360-row">
+      <button id="lt360-start-btn" onclick="toggleLT360()">▶ 開始</button>
+    </div>
+    <div id="lt360-status"></div>
   </div>
   <div id="elev-panel"><h3>▲ 標高 / 累積獲得標高</h3><div id="elev-rows"></div></div>
   <div id="team-legend"><h3>チーム</h3></div>
@@ -254,6 +313,216 @@ let loadedFiles = [];
 let globalMin = null, globalMax = null, currentTime = null;
 let playing = false, animFrameId = null, lastRealTime = null;
 let currentMode = '2d';
+
+// ================================================================
+// LIVETRACK360 STATE
+// ================================================================
+let lt360Active      = false;
+let lt360GroupId     = null;
+let lt360IntervalId  = null;
+let lt360CurrentSecs = 0;
+let lt360Pilots      = new Map(); // sn(number) -> {name, color, sn, points[], polyline2d, marker2d, uid}
+let lt360DialogOpen  = false;
+
+async function lt360Fetch(url) {
+  const proxy = document.getElementById('lt360-proxy').value.trim();
+  const fullUrl = proxy ? proxy + encodeURIComponent(url) : url;
+  const res = await fetch(fullUrl, {cache:'no-store'});
+  if(!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+function toggleLT360Dialog() {
+  lt360DialogOpen = !lt360DialogOpen;
+  document.getElementById('lt360-dialog').style.display = lt360DialogOpen ? 'block' : 'none';
+}
+function closeLT360Dialog() {
+  lt360DialogOpen = false;
+  document.getElementById('lt360-dialog').style.display = 'none';
+}
+
+function toggleLT360() {
+  if(lt360Active) stopLT360(); else startLT360();
+}
+
+async function startLT360() {
+  const raw = document.getElementById('lt360-input').value.trim();
+  const match = raw.match(/(\d+)\/?$/);
+  if(!match){ setLT360Status('グループIDが見つかりません','error'); return; }
+  lt360GroupId = match[1];
+
+  setLT360Status('接続中...','');
+  document.getElementById('lt360-start-btn').textContent = '...';
+  document.getElementById('lt360-start-btn').disabled = true;
+
+  try {
+    const timeData = await lt360Fetch('https://lb.flymaster.net/time.php');
+    lt360CurrentSecs = Math.floor(timeData.st / 10) * 10; // align to 10-second grid
+  } catch(e) {
+    lt360CurrentSecs = Math.floor(Date.now()/1000 / 10) * 10;
+  }
+
+  lt360Active = true;
+  document.getElementById('lt360-btn').classList.add('active');
+  document.getElementById('lt360-btn').textContent = '🌐 LT360 ●';
+  document.getElementById('lt360-start-btn').textContent = '⏹ 停止';
+  document.getElementById('lt360-start-btn').classList.add('stop');
+  document.getElementById('lt360-start-btn').disabled = false;
+  document.getElementById('lt360-panel').style.display = 'block';
+
+  await lt360Poll(true); // first poll fetches pilots too
+  lt360IntervalId = setInterval(()=>lt360Poll(false), 10000);
+}
+
+function stopLT360() {
+  if(lt360IntervalId){ clearInterval(lt360IntervalId); lt360IntervalId=null; }
+  lt360Active = false;
+  document.getElementById('lt360-btn').classList.remove('active');
+  document.getElementById('lt360-btn').textContent = '🌐 LT360';
+  document.getElementById('lt360-start-btn').textContent = '▶ 開始';
+  document.getElementById('lt360-start-btn').classList.remove('stop');
+  document.getElementById('lt360-panel').style.display = 'none';
+  setLT360Status('停止しました','');
+
+  // Remove map layers
+  lt360Pilots.forEach(p=>{
+    if(p.polyline2d) { map2d.removeLayer(p.polyline2d); }
+    if(p.marker2d && map2d.hasLayer(p.marker2d)) { map2d.removeLayer(p.marker2d); }
+    remove3DTeam(p.uid);
+  });
+  lt360Pilots.clear();
+  updateLegend();
+}
+
+async function lt360Poll(fetchPilots) {
+  try {
+    // Fetch position data
+    const data = await lt360Fetch(`https://livetrack360.com/livetracking/data/${lt360GroupId}/${lt360CurrentSecs}`);
+    lt360CurrentSecs += 10;
+
+    // Fetch pilot list (first time or every 60 seconds)
+    let plist = null;
+    if(fetchPilots || lt360CurrentSecs % 60 < 10) {
+      try {
+        const pdata = await lt360Fetch(`https://lb.flymaster.net/getlivedatam.php?grp=${lt360GroupId}&d=${lt360CurrentSecs}&plist=1`);
+        if(pdata && pdata.plist) plist = pdata.plist;
+      } catch(e) { /* pilot list is optional */ }
+    }
+
+    // Register new pilots from plist
+    if(plist) {
+      plist.forEach(p=>{
+        const sn = parseInt(p.sn);
+        if(!lt360Pilots.has(sn)){
+          const color = TEAM_COLORS[colorIndex%TEAM_COLORS.length]; colorIndex++;
+          const uid = teamUidCounter++;
+          const poly = L.polyline([],{color,weight:3,opacity:0.85}).addTo(map2d);
+          const mkr  = L.circleMarker([0,0],{radius:7,color:'white',fillColor:color,fillOpacity:1,weight:2});
+          lt360Pilots.set(sn,{name:p.nm||`Pilot ${sn}`, color, sn, uid, points:[], polyline2d:poly, marker2d:mkr});
+        } else {
+          // Update name if available
+          if(p.nm) lt360Pilots.get(sn).name = p.nm;
+        }
+      });
+    }
+
+    // Decode and update positions from pos data
+    const pos = data.pos;
+    if(pos && typeof pos === 'object' && !Array.isArray(pos)) {
+      for(const [key, rawPts] of Object.entries(pos)){
+        if(!Array.isArray(rawPts)||rawPts.length===0) continue;
+        const sn = parseInt(key.replace(/^p/,''));
+
+        // Auto-create pilot if not in plist
+        if(!lt360Pilots.has(sn)){
+          const color = TEAM_COLORS[colorIndex%TEAM_COLORS.length]; colorIndex++;
+          const uid = teamUidCounter++;
+          const poly = L.polyline([],{color,weight:3,opacity:0.85}).addTo(map2d);
+          const mkr  = L.circleMarker([0,0],{radius:7,color:'white',fillColor:color,fillOpacity:1,weight:2});
+          lt360Pilots.set(sn,{name:`Pilot ${sn}`, color, sn, uid, points:[], polyline2d:poly, marker2d:mkr});
+        }
+
+        const pilot = lt360Pilots.get(sn);
+        // Decode delta-compressed track: [dt, dlon*6e4, dlat*6e4, dalt, spd, bearing, ?, agl]
+        let t=data.tm, lat=0, lng=0, alt=0;
+        for(const pt of rawPts){
+          t   += pt[0];
+          lng += pt[1]/60000;
+          lat += pt[2]/60000;
+          alt += pt[3]||0;
+          if(lat!==0&&lng!==0) pilot.points.push({lat,lng,ele:alt,time:new Date(t*1000)});
+        }
+
+        // Update 2D map
+        if(pilot.points.length>0){
+          pilot.polyline2d.setLatLngs(pilot.points.map(p=>[p.lat,p.lng]));
+          const last=pilot.points[pilot.points.length-1];
+          pilot.marker2d.setLatLng([last.lat,last.lng]);
+          if(!map2d.hasLayer(pilot.marker2d)) pilot.marker2d.addTo(map2d);
+
+          // Update 3D map
+          if(map3d&&map3dReady){
+            const tid=`track-${pilot.uid}`, mid=`marker-${pilot.uid}`;
+            if(!map3d.getSource(tid)){
+              try{
+                map3d.addSource(tid,{type:'geojson',data:{type:'Feature',geometry:{type:'LineString',coordinates:[[0,0],[0,0]]}}});
+                map3d.addLayer({id:tid,type:'line',source:tid,layout:{'line-cap':'round','line-join':'round'},
+                  paint:{'line-color':pilot.color,'line-width':3.5,'line-opacity':0.92}},'cp-circles');
+              }catch(e){}
+              try{
+                map3d.addSource(mid,{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+                map3d.addLayer({id:mid,type:'circle',source:mid,
+                  paint:{'circle-radius':8,'circle-color':pilot.color,'circle-stroke-color':'white','circle-stroke-width':2.5}});
+              }catch(e){}
+            }
+            try{
+              const coords=pilot.points.map(p=>[p.lng,p.lat]);
+              if(map3d.getSource(tid)) map3d.getSource(tid).setData({type:'Feature',geometry:{type:'LineString',coordinates:coords.length>=2?coords:[[0,0],[0,0]]}});
+              if(map3d.getSource(mid)){
+                const lp=pilot.points[pilot.points.length-1];
+                map3d.getSource(mid).setData({type:'FeatureCollection',features:[{type:'Feature',geometry:{type:'Point',coordinates:[lp.lng,lp.lat]},properties:{}}]});
+              }
+            }catch(e){}
+          }
+        }
+      }
+    }
+
+    const pilotCount = lt360Pilots.size;
+    const hasPos = pos && typeof pos==='object' && !Array.isArray(pos) && Object.keys(pos).length>0;
+    setLT360Status(pilotCount>0
+      ? `<b>${pilotCount}</b>チーム ● ${hasPos?'位置更新中':'待機中'}`
+      : '待機中（データなし）', hasPos?'ok':'');
+    document.getElementById('lt360-panel-info').innerHTML =
+      `グループ <b>${lt360GroupId}</b><br>パイロット: <b>${pilotCount}</b><br>${fmt(new Date())}`;
+    updateLegend();
+
+    // Pan to pilots if any new data
+    if(hasPos && pilotCount>0){
+      const coords=[];
+      lt360Pilots.forEach(p=>p.points.forEach(pt=>coords.push([pt.lat,pt.lng])));
+      if(coords.length>0&&currentMode==='2d') {
+        const lats=coords.map(c=>c[0]),lngs=coords.map(c=>c[1]);
+        // Only auto-pan if user hasn't loaded GPX data
+        if(loadedFiles.length===0) map2d.fitBounds([[Math.min(...lats),Math.min(...lngs)],[Math.max(...lats),Math.max(...lngs)]],{padding:[40,40]});
+      }
+    }
+
+  } catch(e) {
+    console.error('LT360 error:', e);
+    const isCors = e instanceof TypeError && e.message.includes('fetch');
+    if(isCors){
+      setLT360Status('⚠ CORS エラー。プロキシURLを入力してください (proxy.py を起動: python3 proxy.py)', 'error');
+    } else {
+      setLT360Status(`エラー: ${e.message}`, 'error');
+    }
+  }
+}
+
+function setLT360Status(msg, cls) {
+  const el = document.getElementById('lt360-status');
+  el.innerHTML = msg; el.className = cls;
+}
 
 // ================================================================
 // LIVE TRACKING STATE
@@ -652,6 +921,7 @@ function updateLegend(){
   const el=document.getElementById('team-legend'); el.innerHTML='<h3>チーム</h3>';
   const all=loadedFiles.flatMap(f=>f.teams.map(t=>({...t,fileId:f.id})));
   if(liveActive) all.push({name:'現在地 ●',color:'#e94560',fileId:null,uid:-1});
+  if(lt360Active) lt360Pilots.forEach(p=>all.push({name:`${p.name} 📡`,color:p.color,fileId:null,uid:p.uid,isLT360:true}));
   if(all.length===0){el.innerHTML+='<div style="color:#666;font-size:12px">なし</div>';return;}
   all.forEach(t=>{
     const item=document.createElement('div'); item.className='legend-item'; item.style.cssText='justify-content:space-between;gap:6px;';
