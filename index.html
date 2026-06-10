@@ -496,16 +496,48 @@ function updateFileList() {
   });
 }
 
+function removeTeam(fileId, teamName) {
+  const f = loadedFiles.find(f => f.id === fileId);
+  if (!f) return;
+  const idx = f.teams.findIndex(t => t.name === teamName);
+  if (idx === -1) return;
+  const t = f.teams[idx];
+  map.removeLayer(t.polyline);
+  if (map.hasLayer(t.markerLayer)) map.removeLayer(t.markerLayer);
+  f.teams.splice(idx, 1);
+  // ファイルのチームが全部消えてCPもなければファイルごと削除
+  if (f.teams.length === 0 && f.cpLayers.length === 0) {
+    loadedFiles.splice(loadedFiles.indexOf(f), 1);
+  }
+  recalcTimeRange();
+  updateLegend();
+  updateFileList();
+  renderAtTime(currentTime);
+}
+
 function updateLegend() {
   const el = document.getElementById('team-legend');
   el.innerHTML = '<h3>チーム</h3>';
-  const allTeams = loadedFiles.flatMap(f => f.teams);
+  const allTeams = loadedFiles.flatMap(f => f.teams.map(t => ({ ...t, fileId: f.id })));
   if (allTeams.length === 0) { el.innerHTML += '<div style="color:#666;font-size:12px">なし</div>'; return; }
   allTeams.forEach(t => {
     const item = document.createElement('div');
     item.className = 'legend-item';
-    item.innerHTML = `<div class="legend-line" style="background:${t.color}"></div><span>${t.name}</span>`;
+    item.style.cssText = 'justify-content:space-between;gap:6px;';
+    item.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;min-width:0">
+        <div class="legend-line" style="background:${t.color};flex-shrink:0"></div>
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.name}</span>
+      </div>
+      <span class="team-remove" data-file-id="${t.fileId}" data-team-name="${t.name}"
+        style="cursor:pointer;opacity:0.5;font-size:13px;flex-shrink:0" title="削除">✕</span>
+    `;
     el.appendChild(item);
+  });
+  el.querySelectorAll('.team-remove').forEach(btn => {
+    btn.addEventListener('mouseenter', () => btn.style.opacity = '1');
+    btn.addEventListener('mouseleave', () => btn.style.opacity = '0.5');
+    btn.addEventListener('click', () => removeTeam(parseFloat(btn.dataset.fileId), btn.dataset.teamName));
   });
 }
 
