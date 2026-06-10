@@ -370,8 +370,8 @@ async function startLT360() {
   document.getElementById('lt360-start-btn').disabled = false;
   document.getElementById('lt360-panel').style.display = 'block';
 
-  await lt360Poll(true); // first poll fetches pilots too
-  lt360IntervalId = setInterval(()=>lt360Poll(false), 10000);
+  await lt360Poll();
+  lt360IntervalId = setInterval(lt360Poll, 10000);
 }
 
 function stopLT360() {
@@ -394,129 +394,110 @@ function stopLT360() {
   updateLegend();
 }
 
-async function lt360Poll(fetchPilots) {
+async function lt360Poll() {
   try {
-    // Fetch position data
-    const data = await lt360Fetch(`https://livetrack360.com/livetracking/data/${lt360GroupId}/${lt360CurrentSecs}`);
-    lt360CurrentSecs += 10;
-
-    // Fetch pilot list (first time or every 60 seconds)
-    let plist = null;
-    if(fetchPilots || lt360CurrentSecs % 60 < 10) {
-      try {
-        const pdata = await lt360Fetch(`https://lb.flymaster.net/getlivedatam.php?grp=${lt360GroupId}&d=${lt360CurrentSecs}&plist=1`);
-        if(pdata && pdata.plist) plist = pdata.plist;
-      } catch(e) { /* pilot list is optional */ }
+    const t = Math.floor(Date.now()/1000);
+    // plist から現在位置・パイロット情報を取得（lb.flymaster.net は CORS 対応・認証不要）
+    const pdata = await lt360Fetch(
+      `https://lb.flymaster.net/getlivedatam.php?grp=${lt360GroupId}&d=${t}&plist=1`
+    );
+    if(!pdata || !pdata.plist) {
+      setLT360Status('データなし（グループが存在しないか未アクティブ）','');
+      return;
     }
 
-    // Register new pilots from plist
-    if(plist) {
-      plist.forEach(p=>{
-        const sn = parseInt(p.sn);
-        if(!lt360Pilots.has(sn)){
-          const color = TEAM_COLORS[colorIndex%TEAM_COLORS.length]; colorIndex++;
-          const uid = teamUidCounter++;
-          const poly = L.polyline([],{color,weight:3,opacity:0.85}).addTo(map2d);
-          const mkr  = L.circleMarker([0,0],{radius:7,color:'white',fillColor:color,fillOpacity:1,weight:2});
-          lt360Pilots.set(sn,{name:p.nm||`Pilot ${sn}`, color, sn, uid, points:[], polyline2d:poly, marker2d:mkr});
-        } else {
-          // Update name if available
-          if(p.nm) lt360Pilots.get(sn).name = p.nm;
-        }
-      });
-    }
+    const now = new Date();
+    let updated = 0;
 
-    // Decode and update positions from pos data
-    const pos = data.pos;
-    if(pos && typeof pos === 'object' && !Array.isArray(pos)) {
-      for(const [key, rawPts] of Object.entries(pos)){
-        if(!Array.isArray(rawPts)||rawPts.length===0) continue;
-        const sn = parseInt(key.replace(/^p/,''));
+    pdata.plist.forEach(p => {
+      const sn  = parseInt(p.sn);
+      const lat = parseFloat(p.a);
+      const lng = parseFloat(p.o);
+      const alt = parseFloat(p.h) || 0;
+      const spd = parseFloat(p.v) || 0;
+      const ts  = p.d ? new Date(parseInt(p.d)*1000) : now;
+      if(isNaN(lat)||isNaN(lng)||lat===0&&lng===0) return;
 
-        // Auto-create pilot if not in plist
-        if(!lt360Pilots.has(sn)){
-          const color = TEAM_COLORS[colorIndex%TEAM_COLORS.length]; colorIndex++;
-          const uid = teamUidCounter++;
-          const poly = L.polyline([],{color,weight:3,opacity:0.85}).addTo(map2d);
-          const mkr  = L.circleMarker([0,0],{radius:7,color:'white',fillColor:color,fillOpacity:1,weight:2});
-          lt360Pilots.set(sn,{name:`Pilot ${sn}`, color, sn, uid, points:[], polyline2d:poly, marker2d:mkr});
-        }
-
-        const pilot = lt360Pilots.get(sn);
-        // Decode delta-compressed track: [dt, dlon*6e4, dlat*6e4, dalt, spd, bearing, ?, agl]
-        let t=data.tm, lat=0, lng=0, alt=0;
-        for(const pt of rawPts){
-          t   += pt[0];
-          lng += pt[1]/60000;
-          lat += pt[2]/60000;
-          alt += pt[3]||0;
-          if(lat!==0&&lng!==0) pilot.points.push({lat,lng,ele:alt,time:new Date(t*1000)});
-        }
-
-        // Update 2D map
-        if(pilot.points.length>0){
-          pilot.polyline2d.setLatLngs(pilot.points.map(p=>[p.lat,p.lng]));
-          const last=pilot.points[pilot.points.length-1];
-          pilot.marker2d.setLatLng([last.lat,last.lng]);
-          if(!map2d.hasLayer(pilot.marker2d)) pilot.marker2d.addTo(map2d);
-
-          // Update 3D map
-          if(map3d&&map3dReady){
-            const tid=`track-${pilot.uid}`, mid=`marker-${pilot.uid}`;
-            if(!map3d.getSource(tid)){
-              try{
-                map3d.addSource(tid,{type:'geojson',data:{type:'Feature',geometry:{type:'LineString',coordinates:[[0,0],[0,0]]}}});
-                map3d.addLayer({id:tid,type:'line',source:tid,layout:{'line-cap':'round','line-join':'round'},
-                  paint:{'line-color':pilot.color,'line-width':3.5,'line-opacity':0.92}},'cp-circles');
-              }catch(e){}
-              try{
-                map3d.addSource(mid,{type:'geojson',data:{type:'FeatureCollection',features:[]}});
-                map3d.addLayer({id:mid,type:'circle',source:mid,
-                  paint:{'circle-radius':8,'circle-color':pilot.color,'circle-stroke-color':'white','circle-stroke-width':2.5}});
-              }catch(e){}
-            }
-            try{
-              const coords=pilot.points.map(p=>[p.lng,p.lat]);
-              if(map3d.getSource(tid)) map3d.getSource(tid).setData({type:'Feature',geometry:{type:'LineString',coordinates:coords.length>=2?coords:[[0,0],[0,0]]}});
-              if(map3d.getSource(mid)){
-                const lp=pilot.points[pilot.points.length-1];
-                map3d.getSource(mid).setData({type:'FeatureCollection',features:[{type:'Feature',geometry:{type:'Point',coordinates:[lp.lng,lp.lat]},properties:{}}]});
-              }
-            }catch(e){}
-          }
-        }
+      // 新規パイロット登録
+      if(!lt360Pilots.has(sn)){
+        const color = TEAM_COLORS[colorIndex%TEAM_COLORS.length]; colorIndex++;
+        const uid   = teamUidCounter++;
+        const poly  = L.polyline([],{color,weight:3,opacity:0.85}).addTo(map2d);
+        const mkr   = L.circleMarker([lat,lng],{radius:7,color:'white',fillColor:color,fillOpacity:1,weight:2});
+        lt360Pilots.set(sn,{name:p.nm||`Pilot ${sn}`, color, sn, uid, points:[], polyline2d:poly, marker2d:mkr, lastD:0});
       }
-    }
 
-    const pilotCount = lt360Pilots.size;
-    const hasPos = pos && typeof pos==='object' && !Array.isArray(pos) && Object.keys(pos).length>0;
-    setLT360Status(pilotCount>0
-      ? `<b>${pilotCount}</b>チーム ● ${hasPos?'位置更新中':'待機中'}`
-      : '待機中（データなし）', hasPos?'ok':'');
+      const pilot = lt360Pilots.get(sn);
+      if(p.nm) pilot.name = p.nm;
+
+      // 前回と異なるタイムスタンプのときだけ点を追加（重複防止）
+      const dTimestamp = parseInt(p.d)||0;
+      if(dTimestamp > pilot.lastD){
+        pilot.lastD = dTimestamp;
+        pilot.points.push({lat, lng, ele:alt, spd, time:ts});
+        updated++;
+      }
+
+      // 2D マップ更新
+      if(pilot.points.length>0){
+        pilot.polyline2d.setLatLngs(pilot.points.map(q=>[q.lat,q.lng]));
+        pilot.marker2d.setLatLng([lat,lng]);
+        if(!map2d.hasLayer(pilot.marker2d)) pilot.marker2d.addTo(map2d);
+      }
+
+      // 3D マップ更新
+      if(map3d&&map3dReady) lt360Update3D(pilot);
+    });
+
+    const cnt = lt360Pilots.size;
+    setLT360Status(`<b>${cnt}</b> 名追跡中 ● ${fmt(now)}`,'ok');
     document.getElementById('lt360-panel-info').innerHTML =
-      `グループ <b>${lt360GroupId}</b><br>パイロット: <b>${pilotCount}</b><br>${fmt(new Date())}`;
+      `グループ <b>${lt360GroupId}</b><br>追跡: <b>${cnt}</b> 名<br>${fmt(now)}`;
     updateLegend();
 
-    // Pan to pilots if any new data
-    if(hasPos && pilotCount>0){
-      const coords=[];
-      lt360Pilots.forEach(p=>p.points.forEach(pt=>coords.push([pt.lat,pt.lng])));
-      if(coords.length>0&&currentMode==='2d') {
+    // 初回のみ範囲に合わせる
+    if(lt360CurrentSecs===0 && cnt>0){
+      lt360CurrentSecs=1;
+      const coords=[]; lt360Pilots.forEach(p=>coords.push([p.points[p.points.length-1].lat, p.points[p.points.length-1].lng]));
+      if(coords.length>0 && currentMode==='2d'){
         const lats=coords.map(c=>c[0]),lngs=coords.map(c=>c[1]);
-        // Only auto-pan if user hasn't loaded GPX data
-        if(loadedFiles.length===0) map2d.fitBounds([[Math.min(...lats),Math.min(...lngs)],[Math.max(...lats),Math.max(...lngs)]],{padding:[40,40]});
+        map2d.fitBounds([[Math.min(...lats),Math.min(...lngs)],[Math.max(...lats),Math.max(...lngs)]],{padding:[60,60]});
       }
     }
 
   } catch(e) {
     console.error('LT360 error:', e);
-    const isCors = e instanceof TypeError && e.message.includes('fetch');
-    if(isCors){
-      setLT360Status('⚠ CORS エラー。プロキシURLを入力してください (proxy.py を起動: python3 proxy.py)', 'error');
-    } else {
-      setLT360Status(`エラー: ${e.message}`, 'error');
-    }
+    const isCors = e instanceof TypeError;
+    setLT360Status(
+      isCors ? '⚠ CORS エラー。プロキシURLを入力し python3 proxy.py を起動してください'
+             : `エラー: ${e.message}`,
+      'error'
+    );
   }
+}
+
+function lt360Update3D(pilot) {
+  const tid=`track-${pilot.uid}`, mid=`marker-${pilot.uid}`;
+  if(!map3d.getSource(tid)){
+    try{
+      map3d.addSource(tid,{type:'geojson',data:{type:'Feature',geometry:{type:'LineString',coordinates:[[0,0],[0,0]]}}});
+      map3d.addLayer({id:tid,type:'line',source:tid,layout:{'line-cap':'round','line-join':'round'},
+        paint:{'line-color':pilot.color,'line-width':3.5,'line-opacity':0.92}},'cp-circles');
+    }catch(e){}
+    try{
+      map3d.addSource(mid,{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+      map3d.addLayer({id:mid,type:'circle',source:mid,
+        paint:{'circle-radius':8,'circle-color':pilot.color,'circle-stroke-color':'white','circle-stroke-width':2.5}});
+    }catch(e){}
+  }
+  try{
+    const coords=pilot.points.map(q=>[q.lng,q.lat]);
+    if(map3d.getSource(tid)) map3d.getSource(tid).setData({type:'Feature',geometry:{type:'LineString',coordinates:coords.length>=2?coords:[[0,0],[0,0]]}});
+    if(map3d.getSource(mid)){
+      const lp=pilot.points[pilot.points.length-1];
+      map3d.getSource(mid).setData({type:'FeatureCollection',features:[{type:'Feature',geometry:{type:'Point',coordinates:[lp.lng,lp.lat]},properties:{}}]});
+    }
+  }catch(e){}
 }
 
 function setLT360Status(msg, cls) {
