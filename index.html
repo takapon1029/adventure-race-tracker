@@ -133,15 +133,18 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
 #drop-overlay.active { display: flex; }
 
 /* Team / Pilot popup */
-.leaflet-popup-content-wrapper {
-  background: rgba(12,18,36,0.97) !important;
-  border: 1px solid #0f3460 !important;
-  border-radius: 8px !important;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.6) !important;
-  color: #eee !important;
+.dark-popup .leaflet-popup-content-wrapper {
+  background: rgba(12,18,36,0.97);
+  border: 1px solid #1a3a6a;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.7);
+  color: #eee;
 }
-.leaflet-popup-tip { background: rgba(12,18,36,0.97) !important; }
-.leaflet-popup-content { margin: 10px 14px !important; font-size: 13px; }
+.dark-popup .leaflet-popup-tip-container .leaflet-popup-tip {
+  background: rgba(12,18,36,0.97);
+}
+.dark-popup .leaflet-popup-close-button { color: #aaa !important; }
+.dark-popup .leaflet-popup-content { margin: 10px 14px; font-size: 13px; min-width: 180px; }
 .tp-name { font-weight: 700; font-size: 14px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #1a2a4a; }
 .tp-row  { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 4px; color: #aaa; }
 .tp-row b { color: #fff; font-weight: 600; }
@@ -364,8 +367,9 @@ function stopLT360() {
 
   // Remove map layers
   lt360Pilots.forEach(p=>{
-    if(p.polyline2d) { map2d.removeLayer(p.polyline2d); }
-    if(p.marker2d && map2d.hasLayer(p.marker2d)) { map2d.removeLayer(p.marker2d); }
+    if(p.polyline2d) map2d.removeLayer(p.polyline2d);
+    if(p.marker2d  && map2d.hasLayer(p.marker2d))  map2d.removeLayer(p.marker2d);
+    if(p.hitMarker && map2d.hasLayer(p.hitMarker)) map2d.removeLayer(p.hitMarker);
     remove3DTeam(p.uid);
   });
   lt360Pilots.clear();
@@ -400,10 +404,13 @@ async function lt360Poll() {
       if(!lt360Pilots.has(sn)){
         const color = TEAM_COLORS[colorIndex%TEAM_COLORS.length]; colorIndex++;
         const uid   = teamUidCounter++;
-        const poly  = L.polyline([],{color,weight:3,opacity:0.85}).addTo(map2d);
-        const mkr   = L.circleMarker([lat,lng],{radius:7,color:'white',fillColor:color,fillOpacity:1,weight:2});
-        const pilot = {name:p.nm||`Pilot ${sn}`, color, sn, uid, points:[], polyline2d:poly, marker2d:mkr, lastD:0};
-        mkr.bindPopup(()=>lt360PopupHtml(pilot), {maxWidth:260});
+        const poly   = L.polyline([],{color,weight:3,opacity:0.85}).addTo(map2d);
+        const mkr    = L.circleMarker([lat,lng],{radius:7,color:'white',fillColor:color,fillOpacity:1,weight:2});
+        const hitMkr = L.circleMarker([lat,lng],{radius:18,color:'transparent',fillColor:'transparent',fillOpacity:0,weight:0,interactive:true});
+        const pilot  = {name:p.nm||`Pilot ${sn}`, color, sn, uid, points:[], polyline2d:poly, marker2d:mkr, hitMarker:hitMkr, lastD:0};
+        const pop    = L.popup({maxWidth:280, className:'dark-popup'}).setContent('');
+        hitMkr.bindPopup(pop);
+        hitMkr.on('click', ()=>{ pop.setContent(lt360PopupHtml(pilot)); });
         lt360Pilots.set(sn, pilot);
       }
 
@@ -422,8 +429,10 @@ async function lt360Poll() {
       if(pilot.points.length>0){
         pilot.polyline2d.setLatLngs(pilot.points.map(q=>[q.lat,q.lng]));
         pilot.marker2d.setLatLng([lat,lng]);
-        if(!map2d.hasLayer(pilot.marker2d)) pilot.marker2d.addTo(map2d);
-        if(pilot.marker2d.isPopupOpen()) pilot.marker2d.setPopupContent(lt360PopupHtml(pilot));
+        pilot.hitMarker.setLatLng([lat,lng]);
+        if(!map2d.hasLayer(pilot.marker2d))  pilot.marker2d.addTo(map2d);
+        if(!map2d.hasLayer(pilot.hitMarker)) pilot.hitMarker.addTo(map2d);
+        if(pilot.hitMarker.isPopupOpen()) pilot.hitMarker.setPopupContent(lt360PopupHtml(pilot));
       }
 
       // 3D マップ更新
@@ -610,8 +619,12 @@ function addParsedFile(filename, parsed) {
     const markerLayer  = L.circleMarker([0,0],{radius:7,color:'white',fillColor:color,fillOpacity:1,weight:2});
     const teamName     = trk.name||(parsed.tracks.length===1?entry.name:`${entry.name} #${i+1}`);
     const hasEle       = trk.points.some(p=>p.ele!=null&&!isNaN(p.ele));
-    const team         = { uid, name:teamName, color, points:trk.points, polyline, markerLayer, hasEle, visiblePts:[] };
-    markerLayer.bindPopup(()=>teamPopupHtml(team, team.visiblePts, currentTime), {maxWidth:260});
+    // 透明な大きいマーカーをクリック領域として重ねる
+    const hitMarker = L.circleMarker([0,0],{radius:18,color:'transparent',fillColor:'transparent',fillOpacity:0,weight:0,interactive:true});
+    const team      = { uid, name:teamName, color, points:trk.points, polyline, markerLayer, hitMarker, hasEle, visiblePts:[] };
+    const popup     = L.popup({maxWidth:280, className:'dark-popup'}).setContent('');
+    hitMarker.bindPopup(popup);
+    hitMarker.on('click', ()=>{ popup.setContent(teamPopupHtml(team, team.visiblePts, currentTime)); });
     entry.teams.push(team);
   });
   loadedFiles.push(entry);
@@ -631,7 +644,9 @@ function removeTeam(fileId, teamName) {
   const f=loadedFiles.find(f=>f.id===fileId); if(!f) return;
   const idx=f.teams.findIndex(t=>t.name===teamName); if(idx===-1) return;
   const t=f.teams[idx];
-  map2d.removeLayer(t.polyline); if(map2d.hasLayer(t.markerLayer)) map2d.removeLayer(t.markerLayer);
+  map2d.removeLayer(t.polyline);
+  if(map2d.hasLayer(t.markerLayer)) map2d.removeLayer(t.markerLayer);
+  if(t.hitMarker&&map2d.hasLayer(t.hitMarker)) map2d.removeLayer(t.hitMarker);
   remove3DTeam(t.uid); f.teams.splice(idx,1);
   if(f.teams.length===0&&f.cpLayers.length===0) loadedFiles.splice(loadedFiles.indexOf(f),1);
   recalcTimeRange(); updateLegend(); updateFileList(); renderAtTime(currentTime);
@@ -640,7 +655,7 @@ function removeFile(fileId) {
   const idx=loadedFiles.findIndex(f=>f.id===fileId); if(idx===-1) return;
   const f=loadedFiles[idx];
   f.cpLayers.forEach(l=>map2d.removeLayer(l));
-  f.teams.forEach(t=>{ map2d.removeLayer(t.polyline); if(map2d.hasLayer(t.markerLayer)) map2d.removeLayer(t.markerLayer); remove3DTeam(t.uid); });
+  f.teams.forEach(t=>{ map2d.removeLayer(t.polyline); if(map2d.hasLayer(t.markerLayer)) map2d.removeLayer(t.markerLayer); if(t.hitMarker&&map2d.hasLayer(t.hitMarker)) map2d.removeLayer(t.hitMarker); remove3DTeam(t.uid); });
   loadedFiles.splice(idx,1);
   if(map3d&&map3dReady) update3DCPs();
   recalcTimeRange(); updateLegend(); updateFileList(); renderAtTime(currentTime);
@@ -715,14 +730,19 @@ function renderAtTime(t) {
     const pts=team.points.filter(p=>p.time&&!isNaN(p.time)&&p.time<=t);
     // 2D
     team.visiblePts = pts;
-    if(pts.length===0){ team.polyline.setLatLngs([]); if(map2d.hasLayer(team.markerLayer)) map2d.removeLayer(team.markerLayer); }
-    else {
+    if(pts.length===0){
+      team.polyline.setLatLngs([]);
+      if(map2d.hasLayer(team.markerLayer)) map2d.removeLayer(team.markerLayer);
+      if(map2d.hasLayer(team.hitMarker))   map2d.removeLayer(team.hitMarker);
+    } else {
       team.polyline.setLatLngs(pts.map(p=>[p.lat,p.lng]));
       const last=pts[pts.length-1];
       team.markerLayer.setLatLng([last.lat,last.lng]);
+      team.hitMarker.setLatLng([last.lat,last.lng]);
       if(!map2d.hasLayer(team.markerLayer)) team.markerLayer.addTo(map2d);
-      // popup が開いていれば内容を更新
-      if(team.markerLayer.isPopupOpen()) team.markerLayer.setPopupContent(teamPopupHtml(team,pts,t));
+      if(!map2d.hasLayer(team.hitMarker))   team.hitMarker.addTo(map2d);
+      // ポップアップが開いていれば内容を更新
+      if(team.hitMarker.isPopupOpen()) team.hitMarker.setPopupContent(teamPopupHtml(team,pts,t));
     }
     // 3D
     if(currentMode==='3d'&&map3d&&map3dReady){
