@@ -163,6 +163,29 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
 .tp-name { font-weight: 700; font-size: 14px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #1a2a4a; }
 .tp-row  { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 4px; color: #aaa; }
 .tp-row b { color: #fff; font-weight: 600; }
+
+/* Follow mode button in legend */
+.leg-follow { cursor:pointer; padding:1px 5px; border-radius:3px; font-size:11px; opacity:0.4; flex-shrink:0; transition:opacity .15s; user-select:none; }
+.leg-follow:hover { opacity:0.85; }
+.leg-follow.on { opacity:1; color:#ffd700; background:rgba(255,215,0,.15); }
+
+/* Speed scale bar inside legend */
+#speed-scale { margin-top:8px; padding-top:8px; border-top:1px solid #1a3060; }
+#speed-scale .sbar { height:5px; border-radius:3px; background:linear-gradient(to right,#4488ff,#00ccff,#00ff88,#ffff00,#ff4400); margin:3px 0; }
+#speed-scale .slbl { display:flex; justify-content:space-between; font-size:10px; color:#888; }
+
+/* Elevation profile panel */
+#elev-profile {
+  position:absolute; bottom:0; left:0; right:0;
+  background:rgba(10,14,30,0.96); border-top:1px solid #1a3060;
+  padding:5px 14px 4px; z-index:1001; display:none;
+}
+#ep-hdr { display:flex; justify-content:space-between; align-items:center; font-size:11px; color:#aaa; margin-bottom:3px; }
+#ep-name { font-weight:600; color:#ddd; font-size:12px; }
+#ep-info { color:#bbb; font-size:11px; margin-left:10px; }
+#ep-close { cursor:pointer; opacity:0.5; font-size:14px; padding:0 2px; }
+#ep-close:hover { opacity:1; }
+#ep-chart { line-height:0; }
 </style>
 </head>
 <body>
@@ -197,7 +220,20 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
     <div id="lt360-status"></div>
   </div>
   <div id="elev-panel"><h3>▲ 標高 / 累積獲得標高</h3><div id="elev-rows"></div></div>
-  <div id="team-legend"><h3>チーム</h3></div>
+  <div id="team-legend">
+    <h3>チーム</h3>
+    <div id="speed-scale">
+      <div class="sbar"></div>
+      <div class="slbl"><span>0</span><span>15+ km/h</span></div>
+    </div>
+  </div>
+  <div id="elev-profile">
+    <div id="ep-hdr">
+      <span><b id="ep-name"></b><span id="ep-info"></span></span>
+      <span id="ep-close" onclick="setFollow(null)">✕</span>
+    </div>
+    <div id="ep-chart"></div>
+  </div>
   <div id="map3d-controls">
     <button class="ctrl-btn" onclick="resetView3D()">⌖ 全体表示</button>
   </div>
@@ -317,6 +353,15 @@ let lt360Active      = false;
 let lt360GroupId     = null;
 let lt360IntervalId  = null;
 let lt360CurrentSecs = 0;
+
+// Follow mode
+let followUid = null;
+
+// Speed canvas
+let spdCanvas = null, spdCtx = null, _spdRaf = null;
+
+// Temperature cache
+let _tempCache = {lat:null,lng:null,temp:null,t:0};
 let lt360Pilots      = new Map(); // sn(number) -> {name, color, sn, points[], polyline2d, marker2d, uid}
 let lt360DialogOpen  = false;
 
@@ -419,7 +464,7 @@ async function lt360Poll() {
       if(!lt360Pilots.has(sn)){
         const color = TEAM_COLORS[colorIndex%TEAM_COLORS.length]; colorIndex++;
         const uid   = teamUidCounter++;
-        const poly   = L.polyline([],{color,weight:3,opacity:0.85}).addTo(map2d);
+        const poly   = L.polyline([],{color,weight:2,opacity:0.3}).addTo(map2d);
         const mkr    = L.circleMarker([lat,lng],{radius:7,color:'white',fillColor:color,fillOpacity:1,weight:2});
         const hitMkr = L.circleMarker([lat,lng],{radius:18,color:'transparent',fillColor:'transparent',fillOpacity:0,weight:0,interactive:true});
         const pilot  = {name:p.nm||`Pilot ${sn}`, color, sn, uid, points:[], polyline2d:poly, marker2d:mkr, hitMarker:hitMkr, lastD:0};
@@ -463,6 +508,9 @@ async function lt360Poll() {
     document.getElementById('lt360-panel-info').innerHTML =
       `グループ <b>${lt360GroupId}</b><br>追跡: <b>${cnt}</b> 名 (<b style="color:#2ecc71">${freshCount}</b> 名アクティブ)<br>${fmt(now)}`;
     updateLegend();
+    redrawSpeedCanvas();
+    if(followUid!=null) _panToFollow();
+    updateElevProfile();
 
     // 初回のみ範囲に合わせる
     if(lt360CurrentSecs===0 && cnt>0){
@@ -521,6 +569,195 @@ function setLT360Status(msg, cls) {
 }
 
 // ================================================================
+// SPEED COLOR + CANVAS
+// ================================================================
+function _lerpColor(c1, c2, t) {
+  const h=s=>[parseInt(s.slice(1,3),16),parseInt(s.slice(3,5),16),parseInt(s.slice(5,7),16)];
+  const [r1,g1,b1]=h(c1),[r2,g2,b2]=h(c2);
+  return `rgb(${Math.round(r1+(r2-r1)*t)},${Math.round(g1+(g2-g1)*t)},${Math.round(b1+(b2-b1)*t)})`;
+}
+const _SPD_STOPS=['#4488ff','#00ccff','#00ff88','#ffff00','#ff4400'];
+function speedColor(spd_ms) {
+  if(spd_ms==null||isNaN(spd_ms)) return 'rgba(120,120,140,0.6)';
+  const t=Math.min(spd_ms*3.6/15,1);
+  const idx=t*(_SPD_STOPS.length-1), i=Math.min(Math.floor(idx),_SPD_STOPS.length-2);
+  return _lerpColor(_SPD_STOPS[i],_SPD_STOPS[i+1],idx-i);
+}
+
+function initSpeedCanvas() {
+  const container=map2d.getContainer();
+  spdCanvas=document.createElement('canvas');
+  spdCanvas.style.cssText='position:absolute;top:0;left:0;pointer-events:none;z-index:450;';
+  container.appendChild(spdCanvas);
+  spdCtx=spdCanvas.getContext('2d');
+  map2d.on('move zoom moveend zoomend resize',()=>{
+    if(_spdRaf) cancelAnimationFrame(_spdRaf);
+    _spdRaf=requestAnimationFrame(()=>{_spdRaf=null;redrawSpeedCanvas();});
+  });
+}
+
+function redrawSpeedCanvas() {
+  if(!spdCanvas||!spdCtx) return;
+  const size=map2d.getSize();
+  spdCanvas.width=size.x; spdCanvas.height=size.y;
+  spdCtx.clearRect(0,0,size.x,size.y);
+  spdCtx.lineWidth=4; spdCtx.lineCap='round'; spdCtx.lineJoin='round';
+  loadedFiles.forEach(f=>f.teams.forEach(t=>{ if(t.visiblePts&&t.visiblePts.length>=2) _drawSpdTrack(t.visiblePts); }));
+  if(lt360Active) lt360Pilots.forEach(p=>{ if(p.points.length>=2) _drawSpdTrack(p.points); });
+}
+
+function _drawSpdTrack(pts) {
+  for(let i=1;i<pts.length;i++){
+    const a=map2d.latLngToContainerPoint([pts[i-1].lat,pts[i-1].lng]);
+    const b=map2d.latLngToContainerPoint([pts[i].lat,pts[i].lng]);
+    spdCtx.beginPath();
+    spdCtx.strokeStyle=speedColor(pts[i].spd);
+    spdCtx.moveTo(a.x,a.y); spdCtx.lineTo(b.x,b.y);
+    spdCtx.stroke();
+  }
+}
+
+// ================================================================
+// FOLLOW MODE
+// ================================================================
+function setFollow(uid) {
+  followUid = (followUid===uid) ? null : uid;
+  updateLegend();
+  updateElevProfile();
+  if(followUid!=null) _panToFollow();
+}
+
+function _panToFollow() {
+  if(followUid==null) return;
+  const pt = _followCurrentPt();
+  if(!pt) return;
+  if(currentMode==='2d') map2d.panTo([pt.lat,pt.lng],{animate:true,duration:0.5});
+  else if(map3d&&map3dReady) map3d.easeTo({center:[pt.lng,pt.lat],duration:400});
+}
+
+function _followCurrentPt() {
+  // Search GPX teams
+  for(const f of loadedFiles) for(const t of f.teams) {
+    if(t.uid===followUid && t.visiblePts&&t.visiblePts.length>0) return t.visiblePts[t.visiblePts.length-1];
+  }
+  // Search LT360 pilots
+  for(const [,p] of lt360Pilots) {
+    if(p.uid===followUid && p.points.length>0) return p.points[p.points.length-1];
+  }
+  return null;
+}
+
+// ================================================================
+// HAVERSINE
+// ================================================================
+function haversine(lat1,lng1,lat2,lng2) {
+  const R=6371000,dL=(lat2-lat1)*Math.PI/180,dN=(lng2-lng1)*Math.PI/180;
+  const a=Math.sin(dL/2)**2+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dN/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+
+// ================================================================
+// GRADIENT CALC
+// ================================================================
+function calcGradient(pts) {
+  if(!pts||pts.length<2) return null;
+  const n=Math.min(10,pts.length-1);
+  const p1=pts[pts.length-1-n],p2=pts[pts.length-1];
+  if(p1.ele==null||p2.ele==null||isNaN(p1.ele)||isNaN(p2.ele)) return null;
+  const dist=haversine(p1.lat,p1.lng,p2.lat,p2.lng);
+  if(dist<5) return null;
+  return (p2.ele-p1.ele)/dist*100;
+}
+
+// ================================================================
+// TEMPERATURE (OpenMeteo, free, no key)
+// ================================================================
+async function fetchTemp(lat,lng) {
+  const now=Date.now();
+  if(_tempCache.lat!=null&&Math.abs(_tempCache.lat-lat)<0.01&&Math.abs(_tempCache.lng-lng)<0.01&&now-_tempCache.t<600000) return _tempCache.temp;
+  try {
+    const r=await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(3)}&longitude=${lng.toFixed(3)}&current_weather=true&forecast_days=1`);
+    const d=await r.json();
+    const temp=d.current_weather?.temperature??null;
+    _tempCache={lat,lng,temp,t:now};
+    return temp;
+  } catch(e) { return null; }
+}
+
+// ================================================================
+// ELEVATION PROFILE
+// ================================================================
+let _epThrottle = 0;
+function updateElevProfile() {
+  const now = Date.now();
+  if(now - _epThrottle < 150 && followUid != null) return; // max ~6fps while playing
+  _epThrottle = now;
+  const panel=document.getElementById('elev-profile');
+  const epPanel=document.getElementById('elev-panel');
+  if(followUid==null){panel.style.display='none';epPanel.style.bottom='10px';return;}
+
+  // Find followed team/pilot
+  let pts=null,name='',color='#aaa';
+  for(const f of loadedFiles) for(const t of f.teams) {
+    if(t.uid===followUid){pts=t.visiblePts;name=t.name;color=t.color;break;}
+  }
+  if(!pts) for(const[,p] of lt360Pilots) {
+    if(p.uid===followUid){pts=p.points;name=p.name;color=p.color;break;}
+  }
+  if(!pts||pts.length<2){panel.style.display='none';epPanel.style.bottom='10px';return;}
+
+  const elePts=pts.filter(p=>p.ele!=null&&!isNaN(p.ele));
+  document.getElementById('ep-name').textContent=name;
+  panel.style.display='block';
+  epPanel.style.bottom='104px';
+
+  // Fetch temp async and update info row
+  const last=pts[pts.length-1];
+  const grad=calcGradient(pts);
+  const gradStr=grad!=null?(grad>=0?`↑${grad.toFixed(1)}%`:`↓${Math.abs(grad).toFixed(1)}%`):'';
+  document.getElementById('ep-info').textContent=gradStr?' — 勾配 '+gradStr:'';
+  fetchTemp(last.lat,last.lng).then(temp=>{
+    if(temp!=null){
+      const g=calcGradient(pts);
+      const gs=g!=null?(g>=0?`↑${g.toFixed(1)}%`:`↓${Math.abs(g).toFixed(1)}%`):'';
+      document.getElementById('ep-info').textContent=` — 気温 ${temp}°C${gs?' / 勾配 '+gs:''}`;
+    }
+  });
+
+  if(elePts.length<2){document.getElementById('ep-chart').innerHTML='';return;}
+
+  // Build distance array
+  let dist=0;
+  const data=elePts.map((p,i)=>{
+    if(i>0) dist+=haversine(elePts[i-1].lat,elePts[i-1].lng,p.lat,p.lng);
+    return {d:dist/1000,e:p.ele,spd:p.spd};
+  });
+  const W=Math.max(panel.clientWidth-28,200),H=54;
+  const minE=Math.min(...data.map(d=>d.e)),maxE=Math.max(...data.map(d=>d.e));
+  const maxD=data[data.length-1].d||1;
+  const eRange=Math.max(maxE-minE,10);
+  const tx=d=>(d/maxD*W).toFixed(1), ty=e=>(H-(e-minE)/eRange*H).toFixed(1);
+
+  let path=`M${tx(data[0].d)},${ty(data[0].e)}`;
+  for(let i=1;i<data.length;i++) path+=` L${tx(data[i].d)},${ty(data[i].e)}`;
+  const fill=`${path} L${tx(maxD)},${H} L${tx(0)},${H} Z`;
+
+  // Colored line by speed
+  let segs='';
+  for(let i=1;i<data.length;i++){
+    segs+=`<line x1="${tx(data[i-1].d)}" y1="${ty(data[i-1].e)}" x2="${tx(data[i].d)}" y2="${ty(data[i].e)}" stroke="${speedColor(data[i].spd)}" stroke-width="2.5" stroke-linecap="round"/>`;
+  }
+
+  document.getElementById('ep-chart').innerHTML=`<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block">
+    <path d="${fill}" fill="rgba(60,100,200,0.15)" stroke="none"/>
+    ${segs}
+    <text x="2" y="11" fill="#888" font-size="9">${Math.round(maxE)}m</text>
+    <text x="2" y="${H-2}" fill="#888" font-size="9">${Math.round(minE)}m</text>
+    <text x="${W-2}" y="${H-2}" fill="#888" font-size="9" text-anchor="end">${maxD.toFixed(1)}km</text>
+  </svg>`;
+}
+
+// ================================================================
 // POPUP HELPERS
 // ================================================================
 function fmtDur(ms) {
@@ -536,12 +773,19 @@ function teamPopupHtml(team, pts, currentT) {
   const spd  = last?.spd!=null ? `${(last.spd*3.6).toFixed(1)} km/h` : '--';
   const elapsed = last?.time&&pts[0]?.time ? fmtDur(last.time - pts[0].time) : '--';
   const loc  = last ? `${last.lat.toFixed(5)}, ${last.lng.toFixed(5)}` : '--';
+  const grad = calcGradient(pts);
+  const gradStr = grad!=null ? (grad>=0?`+${grad.toFixed(1)}%`:`${grad.toFixed(1)}%`) : '--';
+  const followBtn = `<div style="margin-top:8px;padding-top:6px;border-top:1px solid #1a2a4a;text-align:center">
+    <button onclick="setFollow(${followUid===team.uid?'null':team.uid})" style="background:${followUid===team.uid?'#444':'#0f3460'};border:none;color:${followUid===team.uid?'#ffd700':'#aaa'};padding:3px 12px;border-radius:4px;cursor:pointer;font-size:12px">${followUid===team.uid?'🎯 追随中':'🎯 追随する'}</button></div>`;
   return `<div class="tp-name" style="color:${team.color}">${team.name}</div>`
     + row('時刻', fmt(last?.time))
     + row('経過', elapsed)
     + row('標高', ele)
     + (pts.some(p=>p.ele!=null) ? row('累積獲得', gain) : '')
-    + row('位置', loc);
+    + row('速度', spd)
+    + row('勾配', gradStr)
+    + row('位置', loc)
+    + followBtn;
 }
 
 function lt360PopupHtml(pilot) {
@@ -549,11 +793,17 @@ function lt360PopupHtml(pilot) {
   const ele  = last?.ele!=null ? `${Math.round(last.ele)} m` : '--';
   const spd  = last?.spd!=null ? `${parseFloat(last.spd).toFixed(1)} km/h` : '--';
   const loc  = last ? `${last.lat.toFixed(5)}, ${last.lng.toFixed(5)}` : '--';
+  const grad = calcGradient(pilot.points);
+  const gradStr = grad!=null ? (grad>=0?`+${grad.toFixed(1)}%`:`${grad.toFixed(1)}%`) : '--';
+  const followBtn = `<div style="margin-top:8px;padding-top:6px;border-top:1px solid #1a2a4a;text-align:center">
+    <button onclick="setFollow(${followUid===pilot.uid?'null':pilot.uid})" style="background:${followUid===pilot.uid?'#444':'#0f3460'};border:none;color:${followUid===pilot.uid?'#ffd700':'#aaa'};padding:3px 12px;border-radius:4px;cursor:pointer;font-size:12px">${followUid===pilot.uid?'🎯 追随中':'🎯 追随する'}</button></div>`;
   return `<div class="tp-name" style="color:${pilot.color}">📡 ${pilot.name}</div>`
     + row('標高', ele)
     + row('速度', spd)
+    + row('勾配', gradStr)
     + row('位置', loc)
-    + row('最終更新', fmt(last?.time));
+    + row('最終更新', fmt(last?.time))
+    + followBtn;
 }
 
 function row(label, val) {
@@ -640,7 +890,7 @@ function addParsedFile(filename, parsed) {
   parsed.tracks.forEach((trk,i) => {
     const color = TEAM_COLORS[colorIndex%TEAM_COLORS.length]; colorIndex++;
     const uid   = teamUidCounter++;
-    const polyline     = L.polyline([],{color,weight:3,opacity:0.85}).addTo(map2d);
+    const polyline     = L.polyline([],{color,weight:2,opacity:0.3}).addTo(map2d);
     const markerLayer  = L.circleMarker([0,0],{radius:7,color:'white',fillColor:color,fillOpacity:1,weight:2});
     const teamName     = trk.name||(parsed.tracks.length===1?entry.name:`${entry.name} #${i+1}`);
     const hasEle       = trk.points.some(p=>p.ele!=null&&!isNaN(p.ele));
@@ -803,6 +1053,9 @@ function renderAtTime(t) {
     }
   }));
   updateElevPanel(elevData);
+  redrawSpeedCanvas();
+  if(followUid!=null) _panToFollow();
+  updateElevProfile();
 }
 
 // ================================================================
@@ -893,21 +1146,39 @@ function updateFileList(){
 }
 
 function updateLegend(){
-  const el=document.getElementById('team-legend'); el.innerHTML='<h3>チーム</h3>';
+  const el=document.getElementById('team-legend');
+  el.innerHTML='<h3>チーム</h3>';
   const all=loadedFiles.flatMap(f=>f.teams.map(t=>({...t,fileId:f.id})));
   if(lt360Active) lt360Pilots.forEach(p=>all.push({name:`${p.name} 📡`,color:p.color,fileId:null,uid:p.uid,isLT360:true}));
-  if(all.length===0){el.innerHTML+='<div style="color:#666;font-size:12px">なし</div>';return;}
-  all.forEach(t=>{
-    const item=document.createElement('div'); item.className='legend-item'; item.style.cssText='justify-content:space-between;gap:6px;';
-    item.innerHTML=`<div style="display:flex;align-items:center;gap:8px;min-width:0"><div class="legend-line" style="background:${t.color};flex-shrink:0"></div><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.name}</span></div>`
+  if(all.length===0){
+    el.innerHTML+='<div style="color:#666;font-size:12px">なし</div>';
+  } else {
+    all.forEach(t=>{
+      const isFollowed=followUid===t.uid;
+      const item=document.createElement('div'); item.className='legend-item'; item.style.cssText='justify-content:space-between;gap:4px;';
+      item.innerHTML=`<div style="display:flex;align-items:center;gap:6px;min-width:0;flex:1;cursor:pointer" data-uid="${t.uid}">
+        <div class="legend-line" style="background:${t.color};flex-shrink:0"></div>
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${isFollowed?'🎯 ':''}${t.name}</span>
+      </div>`
+      +`<span class="leg-follow${isFollowed?' on':''}" data-uid="${t.uid}" title="追随モード">⊙</span>`
       +(t.fileId!=null?`<span class="team-remove" data-file-id="${t.fileId}" data-team-name="${t.name}" style="cursor:pointer;opacity:0.5;font-size:13px;flex-shrink:0" title="削除">✕</span>`:'');
-    el.appendChild(item);
-  });
-  el.querySelectorAll('.team-remove').forEach(btn=>{
-    btn.addEventListener('mouseenter',()=>btn.style.opacity='1');
-    btn.addEventListener('mouseleave',()=>btn.style.opacity='0.5');
-    btn.addEventListener('click',()=>removeTeam(parseFloat(btn.dataset.fileId),btn.dataset.teamName));
-  });
+      el.appendChild(item);
+    });
+    el.querySelectorAll('.team-remove').forEach(btn=>{
+      btn.addEventListener('mouseenter',()=>btn.style.opacity='1');
+      btn.addEventListener('mouseleave',()=>btn.style.opacity='0.5');
+      btn.addEventListener('click',()=>removeTeam(parseFloat(btn.dataset.fileId),btn.dataset.teamName));
+    });
+    el.querySelectorAll('.leg-follow').forEach(btn=>{
+      btn.addEventListener('click',()=>setFollow(parseInt(btn.dataset.uid)));
+    });
+    el.querySelectorAll('[data-uid]').forEach(div=>{
+      if(div.classList.contains('leg-follow')) return;
+      div.addEventListener('click',()=>setFollow(parseInt(div.dataset.uid)));
+    });
+  }
+  // Speed scale bar
+  el.insertAdjacentHTML('beforeend','<div id="speed-scale"><div class="sbar"></div><div class="slbl"><span>0</span><span>15+ km/h</span></div></div>');
 }
 
 // ================================================================
@@ -942,7 +1213,14 @@ function loadDemoData(){
       const steps=30+Math.floor(Math.random()*20);
       for(let s=0;s<=steps;s++){
         const r=s/steps,j=0.002;
-        pts.push({lat:cpPoints[i].lat+(cpPoints[i+1].lat-cpPoints[i].lat)*r+(Math.random()-.5)*j,lng:cpPoints[i].lng+(cpPoints[i+1].lng-cpPoints[i].lng)*r+(Math.random()-.5)*j,time:new Date(base.getTime()+(ti*600+(i*35+s)*180+Math.random()*60)*1000),ele:eleProfile[i]+(eleProfile[i+1]-eleProfile[i])*r+(Math.random()-.5)*20});
+        const lat=cpPoints[i].lat+(cpPoints[i+1].lat-cpPoints[i].lat)*r+(Math.random()-.5)*j;
+        const lng=cpPoints[i].lng+(cpPoints[i+1].lng-cpPoints[i].lng)*r+(Math.random()-.5)*j;
+        const time=new Date(base.getTime()+(ti*600+(i*35+s)*180+Math.random()*60)*1000);
+        const ele=eleProfile[i]+(eleProfile[i+1]-eleProfile[i])*r+(Math.random()-.5)*20;
+        const prev=pts[pts.length-1];
+        let spd=null;
+        if(prev&&prev.time){const dt=(time-prev.time)/1000;if(dt>0){const dx=Math.sqrt((lat-prev.lat)**2+(lng-prev.lng)**2)*111320;spd=dx/dt;}}
+        pts.push({lat,lng,time,ele,spd});
       }
     }
     return {name,points:pts};
@@ -950,6 +1228,7 @@ function loadDemoData(){
   addParsedFile('Demo.gpx',{cpPoints,tracks});
 }
 
+initSpeedCanvas();
 loadDemoData();
 </script>
 </body>
