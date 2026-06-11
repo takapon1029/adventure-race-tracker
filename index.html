@@ -230,7 +230,10 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
   <div id="elev-profile">
     <div id="ep-hdr">
       <span><b id="ep-name"></b><span id="ep-info"></span></span>
-      <span id="ep-close" onclick="setFollow(null)">✕</span>
+      <span style="display:flex;align-items:center;gap:8px">
+        <a id="ep-sv" href="" target="_blank" rel="noopener" style="display:none;color:#aad4ff;font-size:12px;text-decoration:none;background:#1a3a6a;padding:2px 8px;border-radius:3px;">📷 ストリートビュー</a>
+        <span id="ep-close" onclick="setFollow(null)">✕</span>
+      </span>
     </div>
     <div id="ep-chart"></div>
   </div>
@@ -577,6 +580,18 @@ function _lerpColor(c1, c2, t) {
   return `rgb(${Math.round(r1+(r2-r1)*t)},${Math.round(g1+(g2-g1)*t)},${Math.round(b1+(b2-b1)*t)})`;
 }
 const _SPD_STOPS=['#4488ff','#00ccff','#00ff88','#ffff00','#ff4400'];
+function streetViewUrl(lat, lng) {
+  return `https://www.google.com/maps/@${lat},${lng},3a,75y,90t/data=!3m1!1e1`;
+}
+function streetViewBtn(lat, lng) {
+  if(lat==null||lng==null) return '';
+  return `<div style="margin-top:8px;padding-top:6px;border-top:1px solid #1a2a4a">
+    <a href="${streetViewUrl(lat,lng)}" target="_blank" rel="noopener"
+       style="display:block;text-align:center;background:#1a3a6a;color:#aad4ff;padding:4px 0;border-radius:4px;font-size:12px;text-decoration:none;">
+      📷 ストリートビュー
+    </a></div>`;
+}
+
 function speedColor(spd_ms) {
   if(spd_ms==null||isNaN(spd_ms)) return 'rgba(120,120,140,0.6)';
   const t=Math.min(spd_ms*3.6/15,1);
@@ -622,6 +637,7 @@ function _drawSpdTrack(pts) {
 // ================================================================
 function setFollow(uid) {
   followUid = (followUid===uid) ? null : uid;
+  _epThrottle = 0; // force immediate refresh on follow change
   updateLegend();
   updateElevProfile();
   if(followUid!=null) _panToFollow();
@@ -704,15 +720,17 @@ function updateElevProfile() {
   if(!pts) for(const[,p] of lt360Pilots) {
     if(p.uid===followUid){pts=p.points;name=p.name;color=p.color;break;}
   }
-  if(!pts||pts.length<2){panel.style.display='none';epPanel.style.bottom='10px';return;}
+  if(!pts||pts.length===0){panel.style.display='none';epPanel.style.bottom='10px';return;}
 
+  const last=pts[pts.length-1];
   const elePts=pts.filter(p=>p.ele!=null&&!isNaN(p.ele));
   document.getElementById('ep-name').textContent=name;
+  document.getElementById('ep-sv').href=streetViewUrl(last.lat,last.lng);
+  document.getElementById('ep-sv').style.display='inline';
   panel.style.display='block';
   epPanel.style.bottom='104px';
 
   // Fetch temp async and update info row
-  const last=pts[pts.length-1];
   const grad=calcGradient(pts);
   const gradStr=grad!=null?(grad>=0?`↑${grad.toFixed(1)}%`:`↓${Math.abs(grad).toFixed(1)}%`):'';
   document.getElementById('ep-info').textContent=gradStr?' — 勾配 '+gradStr:'';
@@ -785,7 +803,8 @@ function teamPopupHtml(team, pts, currentT) {
     + row('速度', spd)
     + row('勾配', gradStr)
     + row('位置', loc)
-    + followBtn;
+    + followBtn
+    + streetViewBtn(last?.lat, last?.lng);
 }
 
 function lt360PopupHtml(pilot) {
@@ -803,7 +822,8 @@ function lt360PopupHtml(pilot) {
     + row('勾配', gradStr)
     + row('位置', loc)
     + row('最終更新', fmt(last?.time))
-    + followBtn;
+    + followBtn
+    + streetViewBtn(last?.lat, last?.lng);
 }
 
 function row(label, val) {
