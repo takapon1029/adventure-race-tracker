@@ -459,7 +459,7 @@ async function lt360Poll() {
       const lat = parseFloat(p.a);
       const lng = parseFloat(p.o);
       const alt = parseFloat(p.h) || 0;
-      const spd = parseFloat(p.v) || 0;
+      const spd = (parseFloat(p.v) || 0) / 3.6; // flymaster v is km/h -> store m/s (same unit as GPX points)
       const ts  = p.d ? new Date(parseInt(p.d)*1000) : now;
       if(isNaN(lat)||isNaN(lng)||lat===0&&lng===0) return;
 
@@ -810,7 +810,7 @@ function teamPopupHtml(team, pts, currentT) {
 function lt360PopupHtml(pilot) {
   const last = pilot.points.length>0 ? pilot.points[pilot.points.length-1] : null;
   const ele  = last?.ele!=null ? `${Math.round(last.ele)} m` : '--';
-  const spd  = last?.spd!=null ? `${parseFloat(last.spd).toFixed(1)} km/h` : '--';
+  const spd  = last?.spd!=null ? `${(last.spd*3.6).toFixed(1)} km/h` : '--';
   const loc  = last ? `${last.lat.toFixed(5)}, ${last.lng.toFixed(5)}` : '--';
   const grad = calcGradient(pilot.points);
   const gradStr = grad!=null ? (grad>=0?`+${grad.toFixed(1)}%`:`${grad.toFixed(1)}%`) : '--';
@@ -863,7 +863,7 @@ function parseGPX(text) {
       let spd = null;
       if(prev&&prev.time&&thisTime){
         const dt=(thisTime-prev.time)/1000;
-        if(dt>0){ const dx=Math.sqrt((lat-prev.lat)**2+(lng-prev.lng)**2)*111320; spd=dx/dt; }
+        if(dt>0) spd=haversine(prev.lat,prev.lng,lat,lng)/dt;
       }
       points.push({ lat, lng, time:thisTime, ele:eEl?parseFloat(eEl.textContent):null, spd });
     });
@@ -1239,7 +1239,7 @@ function loadDemoData(){
         const ele=eleProfile[i]+(eleProfile[i+1]-eleProfile[i])*r+(Math.random()-.5)*20;
         const prev=pts[pts.length-1];
         let spd=null;
-        if(prev&&prev.time){const dt=(time-prev.time)/1000;if(dt>0){const dx=Math.sqrt((lat-prev.lat)**2+(lng-prev.lng)**2)*111320;spd=dx/dt;}}
+        if(prev&&prev.time){const dt=(time-prev.time)/1000;if(dt>0)spd=haversine(prev.lat,prev.lng,lat,lng)/dt;}
         pts.push({lat,lng,time,ele,spd});
       }
     }
