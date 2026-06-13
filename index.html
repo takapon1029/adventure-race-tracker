@@ -186,6 +186,16 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
 #ep-close { cursor:pointer; opacity:0.5; font-size:14px; padding:0 2px; }
 #ep-close:hover { opacity:1; }
 #ep-chart { line-height:0; }
+
+/* Direction marker */
+.team-mkr-wrap { position:relative; width:30px; height:30px; }
+.team-mkr-arrow { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; transition:transform 0.4s ease; }
+.team-mkr-dot   { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; }
+@keyframes mpulse {
+  0%,100% { opacity:1; }
+  50% { opacity:0.55; filter:drop-shadow(0 0 5px white); }
+}
+.mkr-moving { animation:mpulse 0.85s ease-in-out infinite; }
 </style>
 </head>
 <body>
@@ -194,7 +204,7 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
   <h1>🏔 AR Tracker</h1>
   <button id="load-btn" class="hdr-btn" onclick="document.getElementById('file-input').click()">GPXを読み込む</button>
   <input type="file" id="file-input" accept=".gpx" multiple>
-  <button id="mode-btn" class="hdr-btn" onclick="toggleMode()">🛰 衛星3D</button>
+  <button id="mode-btn" class="hdr-btn" onclick="cycleMapMode()">🛰 衛星2D</button>
   <button id="lt360-btn" class="hdr-btn" onclick="toggleLT360Dialog()">🌐 LT360</button>
   <div id="file-list"></div>
 </div>
@@ -267,10 +277,55 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
 // 2D MAP (Leaflet + 国土地理院)
 // ================================================================
 const map2d = L.map('map2d', { zoomControl: true }).setView([36, 138], 10);
-L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
-  attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院</a>',
-  maxZoom: 18
-}).addTo(map2d);
+const _tileGSI    = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png',
+  { attribution:'<a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院</a>', maxZoom:18 }).addTo(map2d);
+const _tileSat    = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  { attribution:'ESRI World Imagery', maxZoom:19 });
+const _tileAerial = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg',
+  { attribution:'<a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院 航空写真</a>', maxZoom:18 });
+
+// マップモード: '2d-map' | '2d-sat' | '2d-aerial' | '3d'
+let mapMode = '2d-map';
+const _MODE_NEXT  = { '2d-map':'2d-sat', '2d-sat':'2d-aerial', '2d-aerial':'3d', '3d':'2d-map' };
+const _MODE_LABEL = { '2d-map':'🛰 衛星2D', '2d-sat':'📷 航空写真', '2d-aerial':'🌐 衛星3D', '3d':'🗺 地形図' };
+
+function cycleMapMode() { switchMapMode(_MODE_NEXT[mapMode]); }
+
+function switchMapMode(mode) {
+  const prev = mapMode;
+  mapMode = mode;
+  const btn = document.getElementById('mode-btn');
+  btn.textContent = _MODE_LABEL[mode];
+
+  if(mode === '3d') {
+    btn.classList.add('active');
+    document.getElementById('map2d').style.display = 'none';
+    document.getElementById('map3d').style.display = 'block';
+    document.getElementById('map3d-controls').style.display = 'flex';
+    if(!map3dInit) { initMap3D(); }
+    else if(map3d && map3dReady) {
+      const c = map2d.getCenter();
+      map3d.setCenter([c.lng,c.lat]); map3d.setZoom(map2d.getZoom()); map3d.resize();
+      sync3DFromState(); renderAtTime(currentTime);
+    } else if(map3d) map3d.resize();
+  } else {
+    btn.classList.remove('active');
+    document.getElementById('map3d').style.display = 'none';
+    document.getElementById('map2d').style.display = 'block';
+    document.getElementById('map3d-controls').style.display = 'none';
+    // Switch tile layer
+    [_tileGSI, _tileSat, _tileAerial].forEach(t => { if(map2d.hasLayer(t)) map2d.removeLayer(t); });
+    if(mode==='2d-map')    _tileGSI.addTo(map2d);
+    if(mode==='2d-sat')    _tileSat.addTo(map2d);
+    if(mode==='2d-aerial') _tileAerial.addTo(map2d);
+    if(map3d && prev==='3d') { const c=map3d.getCenter(); map2d.setView([c.lat,c.lng],map3d.getZoom()); }
+    map2d.invalidateSize();
+    renderAtTime(currentTime);
+  }
+}
+
+// currentMode は3D判定にのみ使用
+Object.defineProperty(window,'currentMode',{get:()=>mapMode==='3d'?'3d':'2d'});
 
 // ================================================================
 // 3D MAP (MapLibre + 衛星画像 + 地形) — 遅延初期化
@@ -347,7 +402,6 @@ let colorIndex = 0, teamUidCounter = 0;
 let loadedFiles = [];
 let globalMin = null, globalMax = null, currentTime = null;
 let playing = false, animFrameId = null, lastRealTime = null;
-let currentMode = '2d';
 
 // ================================================================
 // LIVETRACK360 STATE
@@ -468,12 +522,11 @@ async function lt360Poll() {
         const color = TEAM_COLORS[colorIndex%TEAM_COLORS.length]; colorIndex++;
         const uid   = teamUidCounter++;
         const poly   = L.polyline([],{color,weight:2,opacity:0.3}).addTo(map2d);
-        const mkr    = L.circleMarker([lat,lng],{radius:7,color:'white',fillColor:color,fillOpacity:1,weight:2});
-        const hitMkr = L.circleMarker([lat,lng],{radius:18,color:'transparent',fillColor:'transparent',fillOpacity:0,weight:0,interactive:true});
-        const pilot  = {name:p.nm||`Pilot ${sn}`, color, sn, uid, points:[], polyline2d:poly, marker2d:mkr, hitMarker:hitMkr, lastD:0};
-        const pop    = L.popup({maxWidth:280, className:'dark-popup'}).setContent('');
-        hitMkr.bindPopup(pop);
-        hitMkr.on('click', ()=>{ pop.setContent(lt360PopupHtml(pilot)); });
+        const mkr    = L.marker([lat,lng],{icon:teamMarkerIcon(color,0,false),interactive:true});
+        const pilot  = {name:p.nm||`Pilot ${sn}`, color, sn, uid, points:[], polyline2d:poly, marker2d:mkr, hitMarker:null, lastD:0, bearing:0};
+        const pop    = L.popup({maxWidth:300, className:'dark-popup', offset:[0,-8]}).setContent('');
+        mkr.bindPopup(pop);
+        mkr.on('click', ()=>{ pop.setContent(lt360PopupHtml(pilot)); });
         lt360Pilots.set(sn, pilot);
       }
 
@@ -491,11 +544,14 @@ async function lt360Poll() {
       // 2D マップ更新
       if(pilot.points.length>0){
         pilot.polyline2d.setLatLngs(pilot.points.map(q=>[q.lat,q.lng]));
+        const pts2=pilot.points;
+        const prev2=pts2.length>1?pts2[pts2.length-2]:null;
+        if(prev2){ pilot.bearing=calcBearing(prev2,pts2[pts2.length-1]); }
+        const isMoving2=(spd||0)>0.3;
         pilot.marker2d.setLatLng([lat,lng]);
-        pilot.hitMarker.setLatLng([lat,lng]);
+        pilot.marker2d.setIcon(teamMarkerIcon(pilot.color, pilot.bearing, isMoving2));
         if(!map2d.hasLayer(pilot.marker2d))  pilot.marker2d.addTo(map2d);
-        if(!map2d.hasLayer(pilot.hitMarker)) pilot.hitMarker.addTo(map2d);
-        if(pilot.hitMarker.isPopupOpen()) pilot.hitMarker.setPopupContent(lt360PopupHtml(pilot));
+        if(pilot.marker2d.isPopupOpen()) pilot.marker2d.setPopupContent(lt360PopupHtml(pilot));
       }
 
       // 3D マップ更新
@@ -580,6 +636,36 @@ function _lerpColor(c1, c2, t) {
   return `rgb(${Math.round(r1+(r2-r1)*t)},${Math.round(g1+(g2-g1)*t)},${Math.round(b1+(b2-b1)*t)})`;
 }
 const _SPD_STOPS=['#4488ff','#00ccff','#00ff88','#ffff00','#ff4400'];
+// ================================================================
+// DIRECTION MARKER
+// ================================================================
+function calcBearing(p1, p2) {
+  if(!p1||!p2) return 0;
+  const dL=(p2.lng-p1.lng)*Math.PI/180, la1=p1.lat*Math.PI/180, la2=p2.lat*Math.PI/180;
+  const y=Math.sin(dL)*Math.cos(la2), x=Math.cos(la1)*Math.sin(la2)-Math.sin(la1)*Math.cos(la2)*Math.cos(dL);
+  return (Math.atan2(y,x)*180/Math.PI+360)%360;
+}
+
+function teamMarkerIcon(color, bearing, isMoving) {
+  const movClass = isMoving ? 'mkr-moving' : '';
+  return L.divIcon({
+    className: '',
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
+    popupAnchor: [0, -16],
+    html: `<div class="team-mkr-wrap ${movClass}">
+      <div class="team-mkr-arrow" style="transform:rotate(${bearing.toFixed(0)}deg)">
+        <svg width="30" height="30" viewBox="-15 -15 30 30" overflow="visible">
+          <polygon points="0,-12 -6,5 0,1 6,5" fill="${color}" stroke="rgba(0,0,0,0.65)" stroke-width="1.5" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="team-mkr-dot">
+        <div style="width:9px;height:9px;border-radius:50%;background:${color};border:2px solid white;box-shadow:0 0 4px rgba(0,0,0,0.6)"></div>
+      </div>
+    </div>`
+  });
+}
+
 function streetViewUrl(lat, lng) {
   return `https://www.google.com/maps/@${lat},${lng},3a,75y,90t/data=!3m1!1e1`;
 }
@@ -911,15 +997,13 @@ function addParsedFile(filename, parsed) {
     const color = TEAM_COLORS[colorIndex%TEAM_COLORS.length]; colorIndex++;
     const uid   = teamUidCounter++;
     const polyline     = L.polyline([],{color,weight:2,opacity:0.3}).addTo(map2d);
-    const markerLayer  = L.circleMarker([0,0],{radius:7,color:'white',fillColor:color,fillOpacity:1,weight:2});
     const teamName     = trk.name||(parsed.tracks.length===1?entry.name:`${entry.name} #${i+1}`);
     const hasEle       = trk.points.some(p=>p.ele!=null&&!isNaN(p.ele));
-    // 透明な大きいマーカーをクリック領域として重ねる
-    const hitMarker = L.circleMarker([0,0],{radius:18,color:'transparent',fillColor:'transparent',fillOpacity:0,weight:0,interactive:true});
-    const team      = { uid, name:teamName, color, points:trk.points, polyline, markerLayer, hitMarker, hasEle, visiblePts:[] };
-    const popup     = L.popup({maxWidth:280, className:'dark-popup'}).setContent('');
-    hitMarker.bindPopup(popup);
-    hitMarker.on('click', ()=>{ popup.setContent(teamPopupHtml(team, team.visiblePts, currentTime)); });
+    const markerLayer  = L.marker([0,0], { icon:teamMarkerIcon(color,0,false), interactive:true });
+    const team      = { uid, name:teamName, color, points:trk.points, polyline, markerLayer, hitMarker:null, hasEle, visiblePts:[], bearing:0 };
+    const popup     = L.popup({maxWidth:300, className:'dark-popup', offset:[0,-8]}).setContent('');
+    markerLayer.bindPopup(popup);
+    markerLayer.on('click', ()=>{ popup.setContent(teamPopupHtml(team, team.visiblePts, currentTime)); });
     entry.teams.push(team);
   });
   loadedFiles.push(entry);
@@ -941,7 +1025,6 @@ function removeTeam(fileId, teamName) {
   const t=f.teams[idx];
   map2d.removeLayer(t.polyline);
   if(map2d.hasLayer(t.markerLayer)) map2d.removeLayer(t.markerLayer);
-  if(t.hitMarker&&map2d.hasLayer(t.hitMarker)) map2d.removeLayer(t.hitMarker);
   remove3DTeam(t.uid); f.teams.splice(idx,1);
   if(f.teams.length===0&&f.cpLayers.length===0) loadedFiles.splice(loadedFiles.indexOf(f),1);
   recalcTimeRange(); updateLegend(); updateFileList(); renderAtTime(currentTime);
@@ -950,7 +1033,7 @@ function removeFile(fileId) {
   const idx=loadedFiles.findIndex(f=>f.id===fileId); if(idx===-1) return;
   const f=loadedFiles[idx];
   f.cpLayers.forEach(l=>map2d.removeLayer(l));
-  f.teams.forEach(t=>{ map2d.removeLayer(t.polyline); if(map2d.hasLayer(t.markerLayer)) map2d.removeLayer(t.markerLayer); if(t.hitMarker&&map2d.hasLayer(t.hitMarker)) map2d.removeLayer(t.hitMarker); remove3DTeam(t.uid); });
+  f.teams.forEach(t=>{ map2d.removeLayer(t.polyline); if(map2d.hasLayer(t.markerLayer)) map2d.removeLayer(t.markerLayer); remove3DTeam(t.uid); });
   loadedFiles.splice(idx,1);
   if(map3d&&map3dReady) update3DCPs();
   recalcTimeRange(); updateLegend(); updateFileList(); renderAtTime(currentTime);
@@ -1048,16 +1131,16 @@ function renderAtTime(t) {
     if(pts.length===0){
       team.polyline.setLatLngs([]);
       if(map2d.hasLayer(team.markerLayer)) map2d.removeLayer(team.markerLayer);
-      if(map2d.hasLayer(team.hitMarker))   map2d.removeLayer(team.hitMarker);
     } else {
       team.polyline.setLatLngs(pts.map(p=>[p.lat,p.lng]));
       const last=pts[pts.length-1];
+      const prev=pts.length>1?pts[pts.length-2]:null;
+      if(prev){ team.bearing=calcBearing(prev,last); }
+      const isMoving=(last.spd||0)>0.3;
       team.markerLayer.setLatLng([last.lat,last.lng]);
-      team.hitMarker.setLatLng([last.lat,last.lng]);
+      team.markerLayer.setIcon(teamMarkerIcon(team.color, team.bearing, isMoving));
       if(!map2d.hasLayer(team.markerLayer)) team.markerLayer.addTo(map2d);
-      if(!map2d.hasLayer(team.hitMarker))   team.hitMarker.addTo(map2d);
-      // ポップアップが開いていれば内容を更新
-      if(team.hitMarker.isPopupOpen()) team.hitMarker.setPopupContent(teamPopupHtml(team,pts,t));
+      if(team.markerLayer.isPopupOpen()) team.markerLayer.setPopupContent(teamPopupHtml(team,pts,t));
     }
     // 3D
     if(currentMode==='3d'&&map3d&&map3dReady){
@@ -1093,32 +1176,8 @@ function updateElevPanel(data) {
 }
 
 // ================================================================
-// MODE SWITCH
+// MODE SWITCH (cycleMapMode / switchMapMode defined near map init)
 // ================================================================
-function toggleMode() {
-  if(currentMode==='2d') switchTo3D(); else switchTo2D();
-}
-function switchTo3D() {
-  currentMode='3d';
-  document.getElementById('map2d').style.display='none';
-  document.getElementById('map3d').style.display='block';
-  document.getElementById('mode-btn').textContent='🗺 2D地図';
-  document.getElementById('mode-btn').classList.add('active');
-  document.getElementById('map3d-controls').style.display='flex';
-  if(!map3dInit){ initMap3D(); }
-  else if(map3d&&map3dReady){ const c=map2d.getCenter(); map3d.setCenter([c.lng,c.lat]); map3d.setZoom(map2d.getZoom()); map3d.resize(); sync3DFromState(); renderAtTime(currentTime); }
-  else if(map3d) map3d.resize();
-}
-function switchTo2D() {
-  currentMode='2d';
-  document.getElementById('map3d').style.display='none';
-  document.getElementById('map2d').style.display='block';
-  document.getElementById('mode-btn').textContent='🛰 衛星3D';
-  document.getElementById('mode-btn').classList.remove('active');
-  document.getElementById('map3d-controls').style.display='none';
-  if(map3d){ const c=map3d.getCenter(); map2d.setView([c.lat,c.lng],map3d.getZoom()); }
-  map2d.invalidateSize(); renderAtTime(currentTime);
-}
 function resetView3D() {
   if(!map3d) return;
   const bounds=[];
