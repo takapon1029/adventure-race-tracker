@@ -242,10 +242,40 @@ html,body{height:100%;overflow:hidden;background:#06090F;font-family:var(--sans)
 #slider{flex:1;accent-color:var(--cyan);height:3px;cursor:pointer;min-width:60px}
 #slider:disabled{opacity:.35;cursor:default}
 
+/* ── street view panel ── */
+#sv-panel{
+  position:absolute;right:10px;bottom:170px;z-index:1002;
+  width:320px;height:220px;
+  background:var(--glass);border:1px solid var(--glass-edge);
+  border-radius:12px;overflow:hidden;display:none;
+  box-shadow:0 8px 32px rgba(0,0,0,.6);
+  resize:both;
+}
+#sv-panel.active{display:flex;flex-direction:column}
+#sv-bar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:5px 10px;background:rgba(8,14,23,.9);flex-shrink:0;
+  border-bottom:1px solid var(--glass-edge);
+}
+#sv-label{font:600 10px/1 var(--mono);color:var(--mut);letter-spacing:.1em;text-transform:uppercase}
+#sv-loc{font:400 9px/1 var(--mono);color:var(--mut);margin-top:1px}
+#sv-close{cursor:pointer;opacity:.5;font-size:14px;transition:opacity .15s;line-height:1}
+#sv-close:hover{opacity:1}
+#sv-refresh{cursor:pointer;opacity:.5;font-size:12px;transition:opacity .15s;padding:0 4px;font-family:var(--mono)}
+#sv-refresh:hover{opacity:1;color:var(--cyan)}
+#sv-frame{flex:1;width:100%;border:none;background:#06090F}
+#sv-no-data{
+  flex:1;display:flex;align-items:center;justify-content:center;
+  font:400 11px/1.5 var(--mono);color:var(--mut);text-align:center;padding:16px;
+}
+#btn-sv-toggle{transition:border-color .15s,color .15s}
+#btn-sv-toggle.on{border-color:var(--cyan);color:var(--cyan)}
+
 @media(max-width:560px){
   #stats{grid-template-columns:repeat(3,1fr);gap:5px 6px}
   .stat .v{font-size:13px}
   #clock-card{display:none}
+  #sv-panel{width:calc(100vw - 20px);right:10px}
 }
 @media(prefers-reduced-motion:reduce){
   .rider-ring,#live-dot,.lt360-pulse,.mkr-moving{animation:none}
@@ -337,6 +367,22 @@ html,body{height:100%;overflow:hidden;background:#06090F;font-family:var(--sans)
     <button class="ctrl-btn" onclick="resetView3D()">⌖ 全体表示</button>
   </div>
 
+  <!-- street view panel -->
+  <div id="sv-panel">
+    <div id="sv-bar">
+      <div>
+        <div id="sv-label">📷 Street View</div>
+        <div id="sv-loc"></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:4px">
+        <span id="sv-refresh" title="再読込" onclick="svForceRefresh()">↻</span>
+        <span id="sv-close" onclick="toggleSV()">✕</span>
+      </div>
+    </div>
+    <iframe id="sv-frame" allowfullscreen referrerpolicy="no-referrer"></iframe>
+    <div id="sv-no-data" style="display:none">この地点のストリートビューは<br>利用できない場合があります</div>
+  </div>
+
   <!-- bottom telemetry deck -->
   <div id="deck">
     <div id="stats">
@@ -364,6 +410,7 @@ html,body{height:100%;overflow:hidden;background:#06090F;font-family:var(--sans)
       </select>
       <input type="range" id="slider" min="0" max="1000" value="0" step="1">
       <span id="time-range">GPXを読み込むとタイムラインが表示されます</span>
+      <button id="btn-sv-toggle" class="btn" onclick="toggleSV()">📷 SV</button>
     </div>
   </div>
 </div>
@@ -764,13 +811,75 @@ function teamMarkerIcon(color, bearing, isMoving) {
 function streetViewUrl(lat, lng) {
   return `https://www.google.com/maps/@${lat},${lng},3a,75y,90t/data=!3m1!1e1`;
 }
+function streetViewEmbedUrl(lat, lng, heading) {
+  const h = (heading||0).toFixed(0);
+  return `https://www.google.com/maps?q=&layer=c&cbll=${lat},${lng}&cbp=12,${h},0,0,0&output=embed`;
+}
 function streetViewBtn(lat, lng) {
   if(lat==null||lng==null) return '';
-  return `<div style="margin-top:8px;padding-top:6px;border-top:1px solid #1a2a4a">
+  return `<div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--glass-edge)">
     <a href="${streetViewUrl(lat,lng)}" target="_blank" rel="noopener"
-       style="display:block;text-align:center;background:#1a3a6a;color:#aad4ff;padding:4px 0;border-radius:4px;font-size:12px;text-decoration:none;">
-      📷 ストリートビュー
+       style="display:block;text-align:center;background:rgba(63,210,255,.1);color:var(--cyan);padding:4px 0;border-radius:6px;font:600 11px/1 var(--mono);text-decoration:none;border:1px solid rgba(63,210,255,.25);">
+      📷 ストリートビュー（外部）
     </a></div>`;
+}
+
+// ================================================================
+// STREET VIEW PANEL
+// ================================================================
+let svActive = false;
+let _svLat = null, _svLng = null, _svHeading = null;
+let _svThrottle = 0;
+
+function toggleSV() {
+  svActive = !svActive;
+  const panel = document.getElementById('sv-panel');
+  const btn   = document.getElementById('btn-sv-toggle');
+  panel.classList.toggle('active', svActive);
+  btn.classList.toggle('on', svActive);
+  if(svActive) _svUpdate(true);
+}
+
+function svForceRefresh() {
+  _svLat = null; // reset cache to force reload
+  _svUpdate(true);
+}
+
+function _svUpdate(force) {
+  if(!svActive) return;
+  const now = Date.now();
+  if(!force && now - _svThrottle < 5000) return;
+
+  const pt = _followCurrentPt();
+  if(!pt) return;
+
+  // Skip if position hasn't moved more than ~30m
+  if(!force && _svLat!=null) {
+    const dlat = Math.abs(pt.lat - _svLat), dlng = Math.abs(pt.lng - _svLng);
+    if(dlat < 0.0003 && dlng < 0.0003) return;
+  }
+
+  _svThrottle = now;
+  _svLat = pt.lat; _svLng = pt.lng;
+
+  // Use team bearing as Street View heading
+  let heading = _svHeading || 0;
+  for(const f of loadedFiles) for(const t of f.teams) {
+    if(t.uid===followUid){ heading = t.bearing||0; break; }
+  }
+  for(const[,p] of lt360Pilots) {
+    if(p.uid===followUid){ heading = p.bearing||0; break; }
+  }
+  _svHeading = heading;
+
+  const frame = document.getElementById('sv-frame');
+  const nodata = document.getElementById('sv-no-data');
+  frame.style.display = 'block';
+  nodata.style.display = 'none';
+  frame.src = streetViewEmbedUrl(pt.lat, pt.lng, heading);
+
+  document.getElementById('sv-loc').textContent =
+    `${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)}`;
 }
 
 function speedColor(spd_ms) {
@@ -818,10 +927,12 @@ function _drawSpdTrack(pts) {
 // ================================================================
 function setFollow(uid) {
   followUid = (followUid===uid) ? null : uid;
-  _epThrottle = 0; // force immediate refresh on follow change
+  _epThrottle = 0;
+  _svLat = null; // force SV refresh on follow change
   updateLegend();
   updateElevProfile();
   if(followUid!=null) _panToFollow();
+  _svUpdate(true);
 }
 
 function _panToFollow() {
@@ -1285,6 +1396,7 @@ function renderAtTime(t) {
   redrawSpeedCanvas();
   if(followUid!=null) _panToFollow();
   updateElevProfile();
+  _svUpdate(false);
 }
 
 // ================================================================
