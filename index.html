@@ -2,224 +2,314 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>アドベンチャーレース トラッカー</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>AR Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"/>
 <style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; color: #eee; height: 100vh; display: flex; flex-direction: column; }
-
-#header {
-  background: #16213e; padding: 10px 16px;
-  display: flex; align-items: center; gap: 10px;
-  border-bottom: 1px solid #0f3460; flex-shrink: 0; flex-wrap: wrap;
+:root {
+  --glass: rgba(8,14,23,.84);
+  --glass-edge: rgba(140,176,216,.22);
+  --ink: #E9F0FA;
+  --mut: #7E93AE;
+  --cyan: #3FD2FF;
+  --live: #FF3B3B;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: "Inter", -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
 }
-#header h1 { font-size: 16px; font-weight: 700; color: #e94560; white-space: nowrap; }
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;background:#06090F;font-family:var(--sans);color:var(--ink)}
+.leaflet-container{font-family:var(--sans)}
 
-.hdr-btn {
-  color: white; border: none; padding: 6px 12px; border-radius: 4px;
-  cursor: pointer; font-size: 13px; white-space: nowrap; flex-shrink: 0;
+/* ── full-screen map ── */
+#map-wrapper{position:fixed;inset:0}
+#map2d,#map3d{position:absolute;inset:0}
+#map3d{display:none}
+
+/* ── top bar ── */
+#topbar{
+  position:absolute;top:0;left:0;right:0;z-index:1000;pointer-events:none;
+  display:flex;align-items:flex-start;justify-content:space-between;
+  padding:10px 12px;gap:8px;flex-wrap:wrap;
 }
-#load-btn  { background: #e94560; }
-#load-btn:hover  { background: #c73652; }
-#mode-btn  { background: #0f3460; border: 1px solid #555; }
-#mode-btn:hover, #mode-btn.active { background: #1a5276; border-color: #3498db; }
-#lt360-btn { background: #0f3460; border: 1px solid #555; }
-#lt360-btn:hover  { background: #1565c0; }
-#lt360-btn.active { background: #1976d2; border-color: #42a5f5; animation: pulse-btn 1.5s infinite; }
-@keyframes pulse-btn { 0%,100%{opacity:1} 50%{opacity:0.7} }
-
-#file-input { display: none; }
-#file-list  { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
-.file-tag   { background: #0f3460; border-radius: 12px; padding: 2px 10px; font-size: 12px; display: flex; align-items: center; gap: 6px; }
-.file-tag .remove { cursor: pointer; opacity: 0.6; font-size: 14px; }
-.file-tag .remove:hover { opacity: 1; }
-
-#map-wrapper { flex: 1; position: relative; overflow: hidden; }
-#map2d, #map3d { position: absolute; inset: 0; }
-#map3d { display: none; }
-
-#timeline { background: #16213e; padding: 10px 16px; border-top: 1px solid #0f3460; flex-shrink: 0; }
-#time-display { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 13px; }
-#current-time { font-size: 15px; font-weight: bold; color: #e94560; }
-#controls { display: flex; align-items: center; gap: 10px; }
-#play-btn  { background: #0f3460; border: none; color: white; width:32px; height:32px; border-radius:4px; cursor:pointer; font-size:16px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
-#play-btn:hover { background: #e94560; }
-#speed-select  { background: #0f3460; border: none; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; cursor: pointer; }
-#slider { flex: 1; accent-color: #e94560; height: 4px; cursor: pointer; }
-#slider:disabled { opacity: 0.4; cursor: default; }
-
-/* Overlays */
-#team-legend {
-  position: absolute; top: 10px; right: 10px;
-  background: rgba(15,22,40,0.92); border-radius: 6px;
-  padding: 10px 14px; z-index: 1000; min-width: 160px;
-  font-size: 13px; border: 1px solid #0f3460;
+#title-card{
+  pointer-events:auto;background:var(--glass);border:1px solid var(--glass-edge);
+  border-radius:10px;padding:8px 12px;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  display:flex;flex-direction:column;gap:5px;max-width:70%;
 }
-#team-legend h3 { font-size: 11px; color: #aaa; margin-bottom: 8px; text-transform: uppercase; letter-spacing:.05em; }
-.legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
-.legend-line { width: 24px; height: 3px; border-radius: 2px; flex-shrink: 0; }
+#title-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#app-name{font:700 14px/1.2 var(--sans);letter-spacing:.02em}
+#file-list{display:flex;flex-wrap:wrap;gap:5px;margin-top:2px}
+.file-tag{
+  background:rgba(63,210,255,.12);border:1px solid rgba(63,210,255,.25);
+  border-radius:8px;padding:2px 8px;font:400 11px/1.5 var(--mono);
+  display:flex;align-items:center;gap:5px;color:var(--ink);
+}
+.file-tag .remove{cursor:pointer;opacity:0.5;font-size:13px;transition:opacity .15s}
+.file-tag .remove:hover{opacity:1}
 
-#elev-panel {
-  position: absolute; bottom: 10px; left: 10px;
-  background: rgba(15,22,40,0.92); border-radius: 6px;
-  padding: 10px 14px; z-index: 1000;
-  font-size: 12px; border: 1px solid #0f3460; min-width: 210px; display: none;
+#clock-card{
+  pointer-events:auto;background:var(--glass);border:1px solid var(--glass-edge);
+  border-radius:10px;padding:8px 12px;text-align:right;
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);flex-shrink:0;
 }
-#elev-panel h3 { font-size: 11px; color: #aaa; margin-bottom: 8px; }
-.elev-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; line-height:1.4; }
-.elev-dot  { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
-.elev-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.elev-vals { text-align:right; white-space:nowrap; color:#ccc; }
-.elev-vals span { color:#fff; font-weight:600; }
-.elev-vals .gain { color:#7fff00; }
+#current-time{font:600 17px/1.1 var(--mono);font-variant-numeric:tabular-nums;color:var(--cyan)}
+#clock-lbl{font:400 9px/1 var(--mono);color:var(--mut);letter-spacing:.14em;margin-top:4px}
 
-/* LT360 dialog */
-#lt360-dialog {
-  display: none; position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
-  background: rgba(15,22,40,0.96); border-radius: 8px; padding: 14px 16px;
-  z-index: 2000; min-width: 320px; max-width: 420px; border: 1px solid #1976d2;
-  font-size: 13px;
+/* ── header toolbar buttons ── */
+#file-input{display:none}
+.btn{
+  appearance:none;border:1px solid var(--glass-edge);background:var(--glass);
+  color:var(--ink);border-radius:8px;font:600 12px/1 var(--mono);
+  padding:8px 11px;cursor:pointer;letter-spacing:.04em;
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  transition:border-color .15s,color .15s,background .15s;white-space:nowrap;
 }
-#lt360-dialog h3 { color: #42a5f5; margin-bottom: 10px; font-size: 13px; display:flex; justify-content:space-between; align-items:center; }
-#lt360-dialog label { display:block; color:#aaa; margin-bottom:3px; font-size:12px; }
-#lt360-dialog input[type=text] {
-  width:100%; background:#0a0e1a; border:1px solid #1976d2; border-radius:4px;
-  color:#fff; padding:6px 8px; font-size:13px; margin-bottom:10px;
-}
-#lt360-dialog input[type=text]::placeholder { color:#555; }
-.lt360-row { display:flex; gap:8px; }
-#lt360-start-btn { flex:1; background:#1976d2; border:none; color:white; padding:7px 12px; border-radius:4px; cursor:pointer; font-size:13px; }
-#lt360-start-btn:hover { background:#1565c0; }
-#lt360-start-btn.stop { background:#c0392b; }
-#lt360-start-btn.stop:hover { background:#a93226; }
-#lt360-status { margin-top:8px; font-size:12px; color:#ccc; min-height:18px; }
-#lt360-status.error { color:#e74c3c; }
-#lt360-status.ok { color:#2ecc71; }
+.btn:active{transform:translateY(1px)}
+.btn:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
+.btn.on{border-color:var(--cyan);color:var(--cyan);box-shadow:inset 0 0 0 1px rgba(63,210,255,.2)}
+#load-btn{background:var(--cyan);color:#04141D;border-color:transparent;font-weight:700}
+#load-btn:hover{background:#5ce0ff}
+#lt360-btn.active{border-color:var(--live);color:var(--live);animation:pulse-btn 1.5s infinite}
+@keyframes pulse-btn{0%,100%{opacity:1}50%{opacity:.7}}
 
-#lt360-panel {
-  position: absolute; top: 10px; left: 10px;
-  background: rgba(15,22,40,0.92); border-radius: 6px;
-  padding: 10px 14px; z-index: 1000;
-  font-size: 12px; border: 1px solid #1976d2; min-width: 180px; display: none;
+/* ── team legend ── */
+#team-legend{
+  position:absolute;top:10px;right:10px;
+  background:var(--glass);border:1px solid var(--glass-edge);
+  border-radius:10px;padding:10px 14px;z-index:1000;min-width:160px;
+  font-size:13px;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
 }
-#lt360-panel h3 { font-size: 11px; color: #42a5f5; margin-bottom: 8px; }
-#lt360-panel-info { color: #ccc; line-height: 1.7; }
-.lt360-pulse {
-  display:inline-block; width:10px; height:10px; border-radius:50%;
-  background:#42a5f5; box-shadow:0 0 0 0 rgba(66,165,245,.7);
-  animation: pulse-dot-blue 1.4s infinite;
-}
-@keyframes pulse-dot-blue { 0%{box-shadow:0 0 0 0 rgba(66,165,245,.7)} 70%{box-shadow:0 0 0 10px rgba(66,165,245,0)} 100%{box-shadow:0 0 0 0 rgba(66,165,245,0)} }
+#team-legend h3{font:700 9px/1 var(--mono);color:var(--mut);margin-bottom:9px;text-transform:uppercase;letter-spacing:.12em}
+.legend-item{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+.legend-line{width:20px;height:3px;border-radius:2px;flex-shrink:0}
+.leg-follow{cursor:pointer;padding:1px 5px;border-radius:3px;font-size:11px;opacity:.35;flex-shrink:0;transition:opacity .15s;user-select:none}
+.leg-follow:hover{opacity:.8}
+.leg-follow.on{opacity:1;color:var(--cyan);background:rgba(63,210,255,.12)}
+#speed-scale{margin-top:8px;padding-top:8px;border-top:1px solid var(--glass-edge)}
+#speed-scale .sbar{height:4px;border-radius:2px;background:linear-gradient(to right,#4488ff,#00ccff,#00ff88,#ffff00,#ff4400);margin:3px 0}
+#speed-scale .slbl{display:flex;justify-content:space-between;font:400 9px/1 var(--mono);color:var(--mut)}
 
-#map3d-controls {
-  position: absolute; bottom: 10px; right: 10px;
-  z-index: 1000; display: none; gap: 4px; flex-direction: column;
+/* ── elevation panel (small overlay) ── */
+#elev-panel{
+  position:absolute;bottom:10px;left:10px;
+  background:var(--glass);border:1px solid var(--glass-edge);
+  border-radius:10px;padding:10px 14px;z-index:1000;
+  font-size:12px;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  min-width:210px;display:none;
 }
-.ctrl-btn {
-  background: rgba(15,22,40,0.92); border: 1px solid #0f3460;
-  color: white; padding: 6px 10px; border-radius: 4px;
-  cursor: pointer; font-size: 12px; text-align: center;
-}
-.ctrl-btn:hover { background: #e94560; border-color:#e94560; }
+#elev-panel h3{font:700 9px/1 var(--mono);color:var(--mut);margin-bottom:8px;text-transform:uppercase;letter-spacing:.12em}
+.elev-row{display:flex;align-items:center;gap:8px;margin-bottom:5px;line-height:1.4}
+.elev-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.elev-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.elev-vals{text-align:right;white-space:nowrap;color:var(--mut)}
+.elev-vals span{color:var(--ink);font-weight:600}
+.elev-vals .gain{color:#7fff00}
 
-#drop-overlay {
-  display: none; position: fixed; inset: 0;
-  background: rgba(233,69,96,0.15); border: 3px dashed #e94560;
-  z-index: 9999; align-items: center; justify-content: center;
-  font-size: 24px; color: #e94560; pointer-events: none;
+/* ── LT360 dialog ── */
+#lt360-dialog{
+  display:none;position:absolute;top:60px;left:50%;transform:translateX(-50%);
+  background:rgba(6,9,15,.96);border:1px solid var(--glass-edge);
+  border-radius:12px;padding:16px;z-index:2000;min-width:320px;max-width:420px;
+  font-size:13px;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
 }
-#drop-overlay.active { display: flex; }
-
-/* Team / Pilot popup */
-.dark-popup .leaflet-popup-content-wrapper {
-  background: rgba(12,18,36,0.97);
-  border: 1px solid #1a3a6a;
-  border-radius: 8px;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.7);
-  color: #eee;
+#lt360-dialog h3{color:var(--cyan);margin-bottom:12px;font:700 13px/1 var(--mono);display:flex;justify-content:space-between;align-items:center}
+#lt360-dialog label{display:block;color:var(--mut);margin-bottom:4px;font:400 11px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase}
+#lt360-dialog input[type=text]{
+  width:100%;background:rgba(255,255,255,.05);border:1px solid var(--glass-edge);
+  border-radius:6px;color:var(--ink);padding:7px 10px;font:400 13px/1 var(--mono);
+  margin-bottom:12px;
 }
-.dark-popup .leaflet-popup-tip-container .leaflet-popup-tip {
-  background: rgba(12,18,36,0.97);
+#lt360-dialog input[type=text]::placeholder{color:rgba(126,147,174,.5)}
+.lt360-row{display:flex;gap:8px}
+#lt360-start-btn{flex:1;background:var(--cyan);border:none;color:#04141D;padding:8px 12px;border-radius:8px;cursor:pointer;font:700 12px/1 var(--mono)}
+#lt360-start-btn:hover{background:#5ce0ff}
+#lt360-start-btn.stop{background:var(--live);color:#fff}
+#lt360-start-btn.stop:hover{background:#ff6060}
+#lt360-status{margin-top:8px;font:400 12px/1.5 var(--mono);color:var(--mut);min-height:18px}
+#lt360-status.error{color:var(--live)}
+#lt360-status.ok{color:#2ecc71}
+
+/* ── LT360 live panel ── */
+#lt360-panel{
+  position:absolute;top:60px;left:10px;
+  background:var(--glass);border:1px solid rgba(63,210,255,.3);
+  border-radius:10px;padding:10px 14px;z-index:1000;
+  font-size:12px;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  min-width:180px;display:none;
 }
-.dark-popup .leaflet-popup-close-button { color: #aaa !important; }
-.dark-popup .leaflet-popup-content { margin: 10px 14px; font-size: 13px; min-width: 180px; }
-
-/* MapLibre 3D popup */
-.dark-popup-3d .maplibregl-popup-content {
-  background: rgba(12,18,36,0.97);
-  border: 1px solid #1a3a6a;
-  border-radius: 8px;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.7);
-  color: #eee;
-  padding: 10px 14px;
-  font-size: 13px;
-  min-width: 180px;
-  font-family: 'Helvetica Neue', Arial, sans-serif;
+#lt360-panel h3{font:700 9px/1 var(--mono);color:var(--cyan);margin-bottom:8px;text-transform:uppercase;letter-spacing:.12em}
+#lt360-panel-info{color:var(--mut);line-height:1.7;font-family:var(--mono);font-size:11px}
+.lt360-pulse{
+  display:inline-block;width:8px;height:8px;border-radius:50%;
+  background:var(--cyan);box-shadow:0 0 0 0 rgba(63,210,255,.7);
+  animation:pulse-dot-blue 1.4s infinite;
 }
-.dark-popup-3d .maplibregl-popup-tip { border-top-color: rgba(12,18,36,0.97) !important; border-bottom-color: rgba(12,18,36,0.97) !important; }
-.dark-popup-3d .maplibregl-popup-close-button { color: #aaa; font-size: 16px; padding: 2px 6px; }
-.tp-name { font-weight: 700; font-size: 14px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #1a2a4a; }
-.tp-row  { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 4px; color: #aaa; }
-.tp-row b { color: #fff; font-weight: 600; }
+@keyframes pulse-dot-blue{0%{box-shadow:0 0 0 0 rgba(63,210,255,.7)}70%{box-shadow:0 0 0 8px rgba(63,210,255,0)}100%{box-shadow:0 0 0 0 rgba(63,210,255,0)}}
 
-/* Follow mode button in legend */
-.leg-follow { cursor:pointer; padding:1px 5px; border-radius:3px; font-size:11px; opacity:0.4; flex-shrink:0; transition:opacity .15s; user-select:none; }
-.leg-follow:hover { opacity:0.85; }
-.leg-follow.on { opacity:1; color:#ffd700; background:rgba(255,215,0,.15); }
-
-/* Speed scale bar inside legend */
-#speed-scale { margin-top:8px; padding-top:8px; border-top:1px solid #1a3060; }
-#speed-scale .sbar { height:5px; border-radius:3px; background:linear-gradient(to right,#4488ff,#00ccff,#00ff88,#ffff00,#ff4400); margin:3px 0; }
-#speed-scale .slbl { display:flex; justify-content:space-between; font-size:10px; color:#888; }
-
-/* Elevation profile panel */
-#elev-profile {
-  position:absolute; bottom:0; left:0; right:0;
-  background:rgba(10,14,30,0.96); border-top:1px solid #1a3060;
-  padding:5px 14px 4px; z-index:1001; display:none;
+/* ── 3D controls ── */
+#map3d-controls{
+  position:absolute;bottom:10px;right:10px;
+  z-index:1000;display:none;gap:4px;flex-direction:column;
 }
-#ep-hdr { display:flex; justify-content:space-between; align-items:center; font-size:11px; color:#aaa; margin-bottom:3px; }
-#ep-name { font-weight:600; color:#ddd; font-size:12px; }
-#ep-info { color:#bbb; font-size:11px; margin-left:10px; }
-#ep-close { cursor:pointer; opacity:0.5; font-size:14px; padding:0 2px; }
-#ep-close:hover { opacity:1; }
-#ep-chart { line-height:0; }
-
-/* Direction marker */
-.team-mkr-wrap { position:relative; width:30px; height:30px; }
-.team-mkr-arrow { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; transition:transform 0.4s ease; }
-.team-mkr-dot   { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; }
-@keyframes mpulse {
-  0%,100% { opacity:1; }
-  50% { opacity:0.55; filter:drop-shadow(0 0 5px white); }
+.ctrl-btn{
+  background:var(--glass);border:1px solid var(--glass-edge);
+  color:var(--ink);padding:7px 12px;border-radius:8px;
+  cursor:pointer;font:600 12px/1 var(--mono);text-align:center;
+  backdrop-filter:blur(10px);
 }
-.mkr-moving { animation:mpulse 0.85s ease-in-out infinite; }
+.ctrl-btn:hover{border-color:var(--cyan);color:var(--cyan)}
+
+/* ── drop overlay ── */
+#drop-overlay{
+  display:none;position:fixed;inset:0;
+  background:rgba(63,210,255,.08);border:2px dashed var(--cyan);
+  z-index:9999;align-items:center;justify-content:center;
+  font:700 20px/1 var(--mono);color:var(--cyan);letter-spacing:.06em;pointer-events:none;
+}
+#drop-overlay.active{display:flex}
+
+/* ── popups ── */
+.dark-popup .leaflet-popup-content-wrapper{
+  background:rgba(6,9,15,.97);border:1px solid var(--glass-edge);
+  border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.7);color:var(--ink);
+}
+.dark-popup .leaflet-popup-tip-container .leaflet-popup-tip{background:rgba(6,9,15,.97)}
+.dark-popup .leaflet-popup-close-button{color:var(--mut) !important}
+.dark-popup .leaflet-popup-content{margin:10px 14px;font-size:13px;min-width:180px;font-family:var(--sans)}
+.dark-popup-3d .maplibregl-popup-content{
+  background:rgba(6,9,15,.97);border:1px solid var(--glass-edge);
+  border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.7);
+  color:var(--ink);padding:10px 14px;font-size:13px;min-width:180px;
+  font-family:var(--sans);
+}
+.dark-popup-3d .maplibregl-popup-tip{border-top-color:rgba(6,9,15,.97) !important;border-bottom-color:rgba(6,9,15,.97) !important}
+.dark-popup-3d .maplibregl-popup-close-button{color:var(--mut);font-size:16px;padding:2px 6px}
+.tp-name{font-weight:700;font-size:14px;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--glass-edge)}
+.tp-row{display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;color:var(--mut);font-size:12px}
+.tp-row b{color:var(--ink);font-weight:600}
+
+/* ── bottom telemetry deck ── */
+#deck{
+  position:absolute;left:0;right:0;bottom:0;z-index:1001;
+  background:linear-gradient(180deg,rgba(8,14,23,.5) 0%,rgba(8,14,23,.93) 28%);
+  border-top:1px solid var(--glass-edge);
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  padding:8px 14px calc(10px + env(safe-area-inset-bottom));
+}
+#stats{
+  display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-bottom:8px;
+}
+.stat{min-width:0}
+.stat .v{font:600 15px/1.1 var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--ink)}
+.stat .v small{font-size:9px;color:var(--mut);font-weight:400;margin-left:2px}
+.stat .k{font:400 8px/1 var(--mono);color:var(--mut);letter-spacing:.12em;margin-top:3px;white-space:nowrap;text-transform:uppercase}
+#v-spd{color:var(--cyan)}
+
+/* elevation profile in deck */
+#ep-box{position:relative;height:56px;margin-bottom:8px;display:none}
+#ep-chart{width:100%;height:100%;display:block}
+#ep-hdr{
+  display:flex;justify-content:space-between;align-items:center;
+  font:400 11px/1 var(--mono);color:var(--mut);margin-bottom:4px;display:none;
+}
+#ep-name{font-weight:600;color:var(--ink);font-size:12px}
+#ep-info{color:var(--mut);font-size:10px;margin-left:8px}
+#ep-close{cursor:pointer;opacity:.45;font-size:14px;padding:0 3px;transition:opacity .15s}
+#ep-close:hover{opacity:1}
+#ep-sv-wrap{display:flex;align-items:center}
+#ep-sv{
+  display:none;color:#FFD23F;font:600 11px/1 var(--mono);
+  text-decoration:none;border:1px solid rgba(255,210,63,.35);
+  border-radius:5px;padding:3px 8px;margin-right:6px;
+  transition:border-color .15s;
+}
+#ep-sv:hover{border-color:#FFD23F}
+
+/* deck controls */
+#deck-ctrl{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+#time-range{font:400 10px/1 var(--mono);color:var(--mut);flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+#play-btn{min-width:68px;background:var(--cyan);color:#04141D;border:none;font:700 12px/1 var(--mono);padding:9px 12px;border-radius:8px;cursor:pointer}
+#play-btn.paused{background:var(--glass);color:var(--ink);border:1px solid var(--glass-edge)}
+#play-btn:active{transform:translateY(1px)}
+#speed-select{
+  background:rgba(20,30,46,.7);border:1px solid var(--glass-edge);
+  color:var(--ink);padding:8px;border-radius:8px;font:600 12px/1 var(--mono);cursor:pointer;
+}
+#slider{flex:1;accent-color:var(--cyan);height:3px;cursor:pointer;min-width:60px}
+#slider:disabled{opacity:.35;cursor:default}
+
+@media(max-width:560px){
+  #stats{grid-template-columns:repeat(3,1fr);gap:5px 6px}
+  .stat .v{font-size:13px}
+  #clock-card{display:none}
+}
+@media(prefers-reduced-motion:reduce){
+  .rider-ring,#live-dot,.lt360-pulse,.mkr-moving{animation:none}
+}
+
+/* ── direction marker ── */
+.team-mkr-wrap{position:relative;width:34px;height:34px}
+.rider-ring{
+  position:absolute;inset:0;border-radius:50%;
+  border:2px solid var(--cyan);opacity:.8;animation:ping 1.8s ease-out infinite;
+}
+.rider-ring-col{border-color:currentColor}
+@keyframes ping{0%{transform:scale(.4);opacity:.9}100%{transform:scale(1.6);opacity:0}}
+.rider-core{
+  position:absolute;left:50%;top:50%;width:12px;height:12px;margin:-6px 0 0 -6px;
+  border-radius:50%;background:var(--cyan);border:2px solid #06090F;
+  box-shadow:0 0 8px rgba(63,210,255,.9);
+}
+.rider-arrow{
+  position:absolute;left:50%;top:50%;width:0;height:0;
+  margin:-19px 0 0 -5px;
+  border-left:5px solid transparent;border-right:5px solid transparent;
+  border-bottom:9px solid var(--cyan);
+  transform-origin:5px 19px;
+  filter:drop-shadow(0 0 3px rgba(63,210,255,.7));
+  transition:transform .4s ease;
+}
+@keyframes mpulse{0%,100%{opacity:1}50%{opacity:.5;filter:drop-shadow(0 0 6px white)}}
+.mkr-moving{animation:mpulse .9s ease-in-out infinite}
 </style>
 </head>
 <body>
-
-<div id="header">
-  <h1>🏔 AR Tracker</h1>
-  <button id="load-btn" class="hdr-btn" onclick="document.getElementById('file-input').click()">GPXを読み込む</button>
-  <input type="file" id="file-input" accept=".gpx" multiple>
-  <button id="mode-btn" class="hdr-btn" onclick="cycleMapMode()">🛰 衛星2D</button>
-  <button id="lt360-btn" class="hdr-btn" onclick="toggleLT360Dialog()">🌐 LT360</button>
-  <div id="file-list"></div>
-</div>
 
 <div id="map-wrapper">
   <div id="map2d"></div>
   <div id="map3d"></div>
 
+  <!-- top floating bar -->
+  <div id="topbar">
+    <div id="title-card">
+      <div id="title-row">
+        <span id="app-name">🏔 AR Tracker</span>
+        <button id="load-btn" class="btn" onclick="document.getElementById('file-input').click()">GPX読込</button>
+        <input type="file" id="file-input" accept=".gpx" multiple>
+        <button id="mode-btn" class="btn" onclick="cycleMapMode()">🛰 衛星2D</button>
+        <button id="lt360-btn" class="btn" onclick="toggleLT360Dialog()">LT360</button>
+      </div>
+      <div id="file-list"></div>
+    </div>
+    <div id="clock-card">
+      <div id="current-time">--:--:--</div>
+      <div id="clock-lbl">実走時刻</div>
+    </div>
+  </div>
+
+  <!-- LT360 live status panel -->
   <div id="lt360-panel">
-    <h3><span class="lt360-pulse"></span> &nbsp; LiveTrack360 接続中</h3>
+    <h3><span class="lt360-pulse"></span>&nbsp; LiveTrack360 接続中</h3>
     <div id="lt360-panel-info">接続中...</div>
   </div>
 
+  <!-- LT360 settings dialog -->
   <div id="lt360-dialog">
-    <h3>🌐 LiveTrack360 連携 <span onclick="closeLT360Dialog()" style="cursor:pointer;opacity:0.6;font-size:16px" title="閉じる">✕</span></h3>
+    <h3>LT360 連携 <span onclick="closeLT360Dialog()" style="cursor:pointer;opacity:0.5;font-size:16px">✕</span></h3>
     <label>グループID または URL</label>
     <input type="text" id="lt360-input" placeholder="例: 7671 または https://livetrack360.com/livetracking/2d/7671">
     <label>プロキシURL（CORS回避用・省略可）</label>
@@ -229,7 +319,11 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
     </div>
     <div id="lt360-status"></div>
   </div>
-  <div id="elev-panel"><h3>▲ 標高 / 累積獲得標高</h3><div id="elev-rows"></div></div>
+
+  <!-- elevation summary overlay -->
+  <div id="elev-panel"><h3>標高 / 累積獲得</h3><div id="elev-rows"></div></div>
+
+  <!-- team legend -->
   <div id="team-legend">
     <h3>チーム</h3>
     <div id="speed-scale">
@@ -237,34 +331,40 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #1a1a2e; co
       <div class="slbl"><span>0</span><span>15+ km/h</span></div>
     </div>
   </div>
-  <div id="elev-profile">
-    <div id="ep-hdr">
-      <span><b id="ep-name"></b><span id="ep-info"></span></span>
-      <span style="display:flex;align-items:center;gap:8px">
-        <a id="ep-sv" href="" target="_blank" rel="noopener" style="display:none;color:#aad4ff;font-size:12px;text-decoration:none;background:#1a3a6a;padding:2px 8px;border-radius:3px;">📷 ストリートビュー</a>
-        <span id="ep-close" onclick="setFollow(null)">✕</span>
-      </span>
-    </div>
-    <div id="ep-chart"></div>
-  </div>
+
+  <!-- 3D map controls -->
   <div id="map3d-controls">
     <button class="ctrl-btn" onclick="resetView3D()">⌖ 全体表示</button>
   </div>
-</div>
 
-<div id="timeline">
-  <div id="time-display">
-    <span id="time-range">GPXファイルを読み込むとタイムラインが表示されます</span>
-    <span id="current-time">--:--:--</span>
-  </div>
-  <div id="controls">
-    <button id="play-btn" title="再生/停止">▶</button>
-    <select id="speed-select">
-      <option value="1">×1</option><option value="10">×10</option>
-      <option value="60">×60</option><option value="300" selected>×300</option>
-      <option value="600">×600</option><option value="3600">×3600</option>
-    </select>
-    <input type="range" id="slider" min="0" max="1000" value="0" step="1">
+  <!-- bottom telemetry deck -->
+  <div id="deck">
+    <div id="stats">
+      <div class="stat"><div class="v" id="v-spd">--<small>km/h</small></div><div class="k">SPEED</div></div>
+      <div class="stat"><div class="v" id="v-ele">--<small>m</small></div><div class="k">ELEV</div></div>
+      <div class="stat"><div class="v" id="v-grd">--<small>%</small></div><div class="k">GRADE</div></div>
+      <div class="stat"><div class="v" id="v-tmp">--<small>°C</small></div><div class="k">TEMP</div></div>
+      <div class="stat"><div class="v" id="v-gain">--<small>m</small></div><div class="k">GAIN</div></div>
+      <div class="stat"><div class="v" id="v-elp">--</div><div class="k">ELAPSED</div></div>
+    </div>
+    <div id="ep-hdr">
+      <span><b id="ep-name"></b><span id="ep-info"></span></span>
+      <div id="ep-sv-wrap">
+        <a id="ep-sv" href="" target="_blank" rel="noopener">📍 Street View</a>
+        <span id="ep-close" onclick="setFollow(null)">✕</span>
+      </div>
+    </div>
+    <div id="ep-box"><canvas id="ep-chart"></canvas></div>
+    <div id="deck-ctrl">
+      <button id="play-btn" class="paused">▶ 再生</button>
+      <select id="speed-select" class="btn" style="padding:8px">
+        <option value="1">×1</option><option value="10">×10</option>
+        <option value="60">×60</option><option value="300" selected>×300</option>
+        <option value="600">×600</option><option value="3600">×3600</option>
+      </select>
+      <input type="range" id="slider" min="0" max="1000" value="0" step="1">
+      <span id="time-range">GPXを読み込むとタイムラインが表示されます</span>
+    </div>
   </div>
 </div>
 
@@ -650,18 +750,13 @@ function teamMarkerIcon(color, bearing, isMoving) {
   const movClass = isMoving ? 'mkr-moving' : '';
   return L.divIcon({
     className: '',
-    iconSize: [30, 30],
-    iconAnchor: [15, 15],
-    popupAnchor: [0, -16],
+    iconSize: [34, 34],
+    iconAnchor: [17, 17],
+    popupAnchor: [0, -18],
     html: `<div class="team-mkr-wrap ${movClass}">
-      <div class="team-mkr-arrow" style="transform:rotate(${bearing.toFixed(0)}deg)">
-        <svg width="30" height="30" viewBox="-15 -15 30 30" overflow="visible">
-          <polygon points="0,-12 -6,5 0,1 6,5" fill="${color}" stroke="rgba(0,0,0,0.65)" stroke-width="1.5" stroke-linejoin="round"/>
-        </svg>
-      </div>
-      <div class="team-mkr-dot">
-        <div style="width:9px;height:9px;border-radius:50%;background:${color};border:2px solid white;box-shadow:0 0 4px rgba(0,0,0,0.6)"></div>
-      </div>
+      <div class="rider-ring" style="border-color:${color}"></div>
+      <div class="rider-core" style="background:${color};border-color:#06090F;box-shadow:0 0 8px ${color}88"></div>
+      <div class="rider-arrow" style="border-bottom-color:${color};transform:rotate(${bearing.toFixed(0)}deg)"></div>
     </div>`
   });
 }
@@ -792,11 +887,16 @@ async function fetchTemp(lat,lng) {
 let _epThrottle = 0;
 function updateElevProfile() {
   const now = Date.now();
-  if(now - _epThrottle < 150 && followUid != null) return; // max ~6fps while playing
+  if(now - _epThrottle < 150 && followUid != null) return;
   _epThrottle = now;
-  const panel=document.getElementById('elev-profile');
-  const epPanel=document.getElementById('elev-panel');
-  if(followUid==null){panel.style.display='none';epPanel.style.bottom='10px';return;}
+
+  const epHdr=document.getElementById('ep-hdr');
+  const epBox=document.getElementById('ep-box');
+
+  if(followUid==null){
+    epHdr.style.display='none'; epBox.style.display='none';
+    _clearStats(); return;
+  }
 
   // Find followed team/pilot
   let pts=null,name='',color='#aaa';
@@ -806,59 +906,85 @@ function updateElevProfile() {
   if(!pts) for(const[,p] of lt360Pilots) {
     if(p.uid===followUid){pts=p.points;name=p.name;color=p.color;break;}
   }
-  if(!pts||pts.length===0){panel.style.display='none';epPanel.style.bottom='10px';return;}
+  if(!pts||pts.length===0){epHdr.style.display='none';epBox.style.display='none';_clearStats();return;}
 
   const last=pts[pts.length-1];
   const elePts=pts.filter(p=>p.ele!=null&&!isNaN(p.ele));
+
+  // Update stats row
+  const spd = last?.spd!=null ? (last.spd*3.6).toFixed(1) : '--';
+  const ele  = last?.ele!=null&&!isNaN(last.ele) ? Math.round(last.ele) : '--';
+  const grad = calcGradient(pts);
+  const gradStr = grad!=null ? (grad>=0?`+${grad.toFixed(1)}`:`${grad.toFixed(1)}`) : '--';
+  const gain = pts.length>0 ? '+'+calcElevGain(pts) : '--';
+  const elapsed = last?.time&&pts[0]?.time ? fmtDur(last.time-pts[0].time) : '--';
+  document.getElementById('v-spd').innerHTML=`${spd}<small>km/h</small>`;
+  document.getElementById('v-ele').innerHTML=`${ele}<small>m</small>`;
+  document.getElementById('v-grd').innerHTML=`${gradStr}<small>%</small>`;
+  document.getElementById('v-gain').innerHTML=`${gain}<small>m</small>`;
+  document.getElementById('v-elp').textContent=elapsed;
+
+  // Fetch temp async
+  fetchTemp(last.lat,last.lng).then(temp=>{
+    if(temp!=null) document.getElementById('v-tmp').innerHTML=`${temp}<small>°C</small>`;
+  });
+
+  // ep-hdr
   document.getElementById('ep-name').textContent=name;
   document.getElementById('ep-sv').href=streetViewUrl(last.lat,last.lng);
   document.getElementById('ep-sv').style.display='inline';
-  panel.style.display='block';
-  epPanel.style.bottom='104px';
+  epHdr.style.display='flex';
 
-  // Fetch temp async and update info row
-  const grad=calcGradient(pts);
-  const gradStr=grad!=null?(grad>=0?`↑${grad.toFixed(1)}%`:`↓${Math.abs(grad).toFixed(1)}%`):'';
-  document.getElementById('ep-info').textContent=gradStr?' — 勾配 '+gradStr:'';
-  fetchTemp(last.lat,last.lng).then(temp=>{
-    if(temp!=null){
-      const g=calcGradient(pts);
-      const gs=g!=null?(g>=0?`↑${g.toFixed(1)}%`:`↓${Math.abs(g).toFixed(1)}%`):'';
-      document.getElementById('ep-info').textContent=` — 気温 ${temp}°C${gs?' / 勾配 '+gs:''}`;
-    }
-  });
+  if(elePts.length<2){epBox.style.display='none';return;}
+  epBox.style.display='block';
 
-  if(elePts.length<2){document.getElementById('ep-chart').innerHTML='';return;}
-
-  // Build distance array
+  // Build profile canvas via SVG in canvas element via img
   let dist=0;
   const data=elePts.map((p,i)=>{
     if(i>0) dist+=haversine(elePts[i-1].lat,elePts[i-1].lng,p.lat,p.lng);
     return {d:dist/1000,e:p.ele,spd:p.spd};
   });
-  const W=Math.max(panel.clientWidth-28,200),H=54;
+  const cvs=document.getElementById('ep-chart');
+  const W=cvs.parentElement.clientWidth||400, H=56;
+  cvs.width=W; cvs.height=H;
+  const ctx=cvs.getContext('2d');
+  ctx.clearRect(0,0,W,H);
   const minE=Math.min(...data.map(d=>d.e)),maxE=Math.max(...data.map(d=>d.e));
   const maxD=data[data.length-1].d||1;
   const eRange=Math.max(maxE-minE,10);
-  const tx=d=>(d/maxD*W).toFixed(1), ty=e=>(H-(e-minE)/eRange*H).toFixed(1);
+  const tx=d=>d/maxD*W, ty=e=>H-(e-minE)/eRange*H;
 
-  let path=`M${tx(data[0].d)},${ty(data[0].e)}`;
-  for(let i=1;i<data.length;i++) path+=` L${tx(data[i].d)},${ty(data[i].e)}`;
-  const fill=`${path} L${tx(maxD)},${H} L${tx(0)},${H} Z`;
+  // fill
+  ctx.beginPath();
+  ctx.moveTo(tx(data[0].d),ty(data[0].e));
+  for(let i=1;i<data.length;i++) ctx.lineTo(tx(data[i].d),ty(data[i].e));
+  ctx.lineTo(W,H); ctx.lineTo(0,H); ctx.closePath();
+  ctx.fillStyle='rgba(63,210,255,0.08)'; ctx.fill();
 
-  // Colored line by speed
-  let segs='';
+  // speed-colored line
+  ctx.lineWidth=2.5; ctx.lineCap='round';
   for(let i=1;i<data.length;i++){
-    segs+=`<line x1="${tx(data[i-1].d)}" y1="${ty(data[i-1].e)}" x2="${tx(data[i].d)}" y2="${ty(data[i].e)}" stroke="${speedColor(data[i].spd)}" stroke-width="2.5" stroke-linecap="round"/>`;
+    ctx.beginPath();
+    ctx.strokeStyle=speedColor(data[i].spd);
+    ctx.moveTo(tx(data[i-1].d),ty(data[i-1].e));
+    ctx.lineTo(tx(data[i].d),ty(data[i].e));
+    ctx.stroke();
   }
 
-  document.getElementById('ep-chart').innerHTML=`<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block">
-    <path d="${fill}" fill="rgba(60,100,200,0.15)" stroke="none"/>
-    ${segs}
-    <text x="2" y="11" fill="#888" font-size="9">${Math.round(maxE)}m</text>
-    <text x="2" y="${H-2}" fill="#888" font-size="9">${Math.round(minE)}m</text>
-    <text x="${W-2}" y="${H-2}" fill="#888" font-size="9" text-anchor="end">${maxD.toFixed(1)}km</text>
-  </svg>`;
+  // labels
+  ctx.fillStyle='rgba(126,147,174,.7)';
+  ctx.font='9px IBM Plex Mono,monospace';
+  ctx.fillText(`${Math.round(maxE)}m`,3,10);
+  ctx.fillText(`${Math.round(minE)}m`,3,H-2);
+  ctx.textAlign='right';
+  ctx.fillText(`${maxD.toFixed(1)}km`,W-2,H-2);
+}
+
+function _clearStats(){
+  ['v-spd','v-ele','v-grd','v-tmp','v-gain','v-elp'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el) el.innerHTML='--';
+  });
 }
 
 // ================================================================
@@ -1192,21 +1318,27 @@ function resetView3D() {
 // ================================================================
 function startPlay() {
   if(!globalMin||!globalMax) return;
-  playing=true; document.getElementById('play-btn').textContent='⏸';
+  const pb=document.getElementById('play-btn');
+  playing=true; pb.textContent='⏸ 停止'; pb.classList.remove('paused');
   lastRealTime=performance.now();
   function tick(){
     if(!playing) return;
     const now=performance.now(), delta=(now-lastRealTime)/1000; lastRealTime=now;
     const speed=parseInt(document.getElementById('speed-select').value);
     currentTime=new Date(currentTime.getTime()+delta*speed*1000);
-    if(currentTime>=globalMax){ currentTime=new Date(globalMax); playing=false; document.getElementById('play-btn').textContent='▶'; }
+    if(currentTime>=globalMax){ currentTime=new Date(globalMax); stopPlay(); }
     document.getElementById('slider').value=((currentTime-globalMin)/(globalMax-globalMin))*1000;
     renderAtTime(currentTime);
     if(playing) animFrameId=requestAnimationFrame(tick);
   }
   animFrameId=requestAnimationFrame(tick);
 }
-function stopPlay(){ playing=false; document.getElementById('play-btn').textContent='▶'; if(animFrameId) cancelAnimationFrame(animFrameId); }
+function stopPlay(){
+  playing=false;
+  const pb=document.getElementById('play-btn');
+  pb.textContent='▶ 再生'; pb.classList.add('paused');
+  if(animFrameId) cancelAnimationFrame(animFrameId);
+}
 document.getElementById('play-btn').addEventListener('click',()=>{ if(playing) stopPlay(); else{ if(currentTime&&globalMax&&currentTime>=globalMax) currentTime=new Date(globalMin); startPlay(); } });
 document.getElementById('slider').addEventListener('input',e=>{ if(!globalMin||!globalMax) return; stopPlay(); currentTime=new Date(globalMin.getTime()+(e.target.value/1000)*(globalMax-globalMin)); renderAtTime(currentTime); });
 
