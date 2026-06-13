@@ -264,10 +264,10 @@ html,body{height:100%;overflow:hidden;background:#06090F;font-family:var(--sans)
 #sv-refresh{cursor:pointer;opacity:.5;font-size:12px;transition:opacity .15s;padding:0 4px;font-family:var(--mono)}
 #sv-refresh:hover{opacity:1;color:var(--cyan)}
 #sv-frame{flex:1;width:100%;border:none;background:#06090F}
-#sv-no-data{
-  flex:1;display:flex;align-items:center;justify-content:center;
-  font:400 11px/1.5 var(--mono);color:var(--mut);text-align:center;padding:16px;
+#sv-key-screen{
+  flex:1;padding:14px 16px;overflow-y:auto;
 }
+#sv-key-btn:hover{opacity:1 !important;color:var(--cyan)}
 #btn-sv-toggle{transition:border-color .15s,color .15s}
 #btn-sv-toggle.on{border-color:var(--cyan);color:var(--cyan)}
 
@@ -375,12 +375,23 @@ html,body{height:100%;overflow:hidden;background:#06090F;font-family:var(--sans)
         <div id="sv-loc"></div>
       </div>
       <div style="display:flex;align-items:center;gap:4px">
+        <span id="sv-key-btn" title="APIキー設定" onclick="svShowKeyInput()" style="cursor:pointer;opacity:.5;font-size:12px;padding:0 4px;font-family:var(--mono);transition:opacity .15s">⚙</span>
         <span id="sv-refresh" title="再読込" onclick="svForceRefresh()">↻</span>
         <span id="sv-close" onclick="toggleSV()">✕</span>
       </div>
     </div>
-    <iframe id="sv-frame" allowfullscreen referrerpolicy="no-referrer"></iframe>
-    <div id="sv-no-data" style="display:none">この地点のストリートビューは<br>利用できない場合があります</div>
+    <!-- API key input screen -->
+    <div id="sv-key-screen">
+      <div style="font:600 11px/1.4 var(--mono);color:var(--ink);margin-bottom:8px">Google Maps Embed APIキーを入力</div>
+      <div style="font:400 9px/1.5 var(--mono);color:var(--mut);margin-bottom:10px">
+        Google Cloud Console で<br>「Maps Embed API」を有効化して取得
+      </div>
+      <input id="sv-key-input" type="text" placeholder="AIza..." spellcheck="false"
+        style="width:100%;background:rgba(255,255,255,.07);border:1px solid var(--glass-edge);border-radius:6px;color:var(--ink);padding:7px 10px;font:400 12px/1 var(--mono);margin-bottom:8px;box-sizing:border-box">
+      <button onclick="svSaveKey()" style="width:100%;background:var(--cyan);color:#04141D;border:none;border-radius:6px;padding:7px;font:700 12px/1 var(--mono);cursor:pointer">保存して表示</button>
+    </div>
+    <!-- Street View iframe -->
+    <iframe id="sv-frame" allowfullscreen referrerpolicy="no-referrer" style="display:none"></iframe>
   </div>
 
   <!-- bottom telemetry deck -->
@@ -811,9 +822,9 @@ function teamMarkerIcon(color, bearing, isMoving) {
 function streetViewUrl(lat, lng) {
   return `https://www.google.com/maps/@${lat},${lng},3a,75y,90t/data=!3m1!1e1`;
 }
-function streetViewEmbedUrl(lat, lng, heading) {
+function streetViewEmbedUrl(lat, lng, heading, key) {
   const h = (heading||0).toFixed(0);
-  return `https://www.google.com/maps?q=&layer=c&cbll=${lat},${lng}&cbp=12,${h},0,0,0&output=embed`;
+  return `https://www.google.com/maps/embed/v1/streetview?key=${key}&location=${lat},${lng}&heading=${h}&pitch=0&fov=90`;
 }
 function streetViewBtn(lat, lng) {
   if(lat==null||lng==null) return '';
@@ -830,6 +841,7 @@ function streetViewBtn(lat, lng) {
 let svActive = false;
 let _svLat = null, _svLng = null, _svHeading = null;
 let _svThrottle = 0;
+let _svKey = localStorage.getItem('sv_api_key') || '';
 
 function toggleSV() {
   svActive = !svActive;
@@ -837,23 +849,52 @@ function toggleSV() {
   const btn   = document.getElementById('btn-sv-toggle');
   panel.classList.toggle('active', svActive);
   btn.classList.toggle('on', svActive);
-  if(svActive) _svUpdate(true);
+  if(svActive) {
+    if(!_svKey) {
+      _svShowScreen('key');
+    } else {
+      _svShowScreen('frame');
+      _svUpdate(true);
+    }
+  }
+}
+
+function svShowKeyInput() {
+  if(!document.getElementById('sv-panel').classList.contains('active')) toggleSV();
+  _svShowScreen('key');
+  document.getElementById('sv-key-input').value = _svKey;
+}
+
+function svSaveKey() {
+  const val = document.getElementById('sv-key-input').value.trim();
+  if(!val) return;
+  _svKey = val;
+  localStorage.setItem('sv_api_key', val);
+  _svLat = null;
+  _svShowScreen('frame');
+  _svUpdate(true);
+}
+
+function _svShowScreen(which) {
+  document.getElementById('sv-key-screen').style.display = which==='key' ? 'block' : 'none';
+  document.getElementById('sv-frame').style.display = which==='frame' ? 'block' : 'none';
 }
 
 function svForceRefresh() {
-  _svLat = null; // reset cache to force reload
+  if(!_svKey){ svShowKeyInput(); return; }
+  _svLat = null;
+  _svShowScreen('frame');
   _svUpdate(true);
 }
 
 function _svUpdate(force) {
-  if(!svActive) return;
+  if(!svActive || !_svKey) return;
   const now = Date.now();
   if(!force && now - _svThrottle < 5000) return;
 
   const pt = _followCurrentPt();
   if(!pt) return;
 
-  // Skip if position hasn't moved more than ~30m
   if(!force && _svLat!=null) {
     const dlat = Math.abs(pt.lat - _svLat), dlng = Math.abs(pt.lng - _svLng);
     if(dlat < 0.0003 && dlng < 0.0003) return;
@@ -862,7 +903,6 @@ function _svUpdate(force) {
   _svThrottle = now;
   _svLat = pt.lat; _svLng = pt.lng;
 
-  // Use team bearing as Street View heading
   let heading = _svHeading || 0;
   for(const f of loadedFiles) for(const t of f.teams) {
     if(t.uid===followUid){ heading = t.bearing||0; break; }
@@ -873,11 +913,7 @@ function _svUpdate(force) {
   _svHeading = heading;
 
   const frame = document.getElementById('sv-frame');
-  const nodata = document.getElementById('sv-no-data');
-  frame.style.display = 'block';
-  nodata.style.display = 'none';
-  frame.src = streetViewEmbedUrl(pt.lat, pt.lng, heading);
-
+  frame.src = streetViewEmbedUrl(pt.lat, pt.lng, heading, _svKey);
   document.getElementById('sv-loc').textContent =
     `${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)}`;
 }
