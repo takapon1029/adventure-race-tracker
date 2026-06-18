@@ -567,7 +567,7 @@ let playing = false, animFrameId = null, lastRealTime = null;
 let lt360Active      = false;
 let lt360GroupId     = null;
 let lt360IntervalId  = null;
-let lt360CurrentSecs = 0;
+let lt360DidInitialFit = false; // whether the map has auto-zoomed to pilots since the last connect
 
 // Follow mode
 let followUid = null;
@@ -611,13 +611,7 @@ async function startLT360() {
   document.getElementById('lt360-start-btn').textContent = '...';
   document.getElementById('lt360-start-btn').disabled = true;
 
-  try {
-    const timeData = await lt360Fetch('https://lb.flymaster.net/time.php');
-    lt360CurrentSecs = Math.floor(timeData.st / 10) * 10; // align to 10-second grid
-  } catch(e) {
-    lt360CurrentSecs = Math.floor(Date.now()/1000 / 10) * 10;
-  }
-
+  lt360DidInitialFit = false; // arm the one-shot auto-zoom for this connection
   lt360Active = true;
   document.getElementById('lt360-btn').classList.add('active');
   document.getElementById('lt360-btn').textContent = '🌐 LT360 ●';
@@ -729,13 +723,19 @@ async function lt360Poll() {
     if(followUid!=null) _panToFollow();
     updateElevProfile();
 
-    // 初回のみ範囲に合わせる
-    if(lt360CurrentSecs===0 && cnt>0){
-      lt360CurrentSecs=1;
-      const coords=[]; lt360Pilots.forEach(p=>coords.push([p.points[p.points.length-1].lat, p.points[p.points.length-1].lng]));
-      if(coords.length>0 && currentMode==='2d'){
-        const lats=coords.map(c=>c[0]),lngs=coords.map(c=>c[1]);
-        map2d.fitBounds([[Math.min(...lats),Math.min(...lngs)],[Math.max(...lats),Math.max(...lngs)]],{padding:[60,60]});
+    // Auto-zoom to the pilots once, on the first poll that yields a position (2D / 3D)
+    if(!lt360DidInitialFit && cnt>0){
+      const coords=[];
+      lt360Pilots.forEach(p=>{ const n=p.points.length; if(n) coords.push([p.points[n-1].lat, p.points[n-1].lng]); });
+      if(coords.length>0){
+        const lats=coords.map(c=>c[0]), lngs=coords.map(c=>c[1]);
+        if(currentMode==='2d'){
+          map2d.fitBounds([[Math.min(...lats),Math.min(...lngs)],[Math.max(...lats),Math.max(...lngs)]],{padding:[60,60],maxZoom:15});
+          lt360DidInitialFit=true;
+        } else if(map3d&&map3dReady){
+          map3d.fitBounds([[Math.min(...lngs),Math.min(...lats)],[Math.max(...lngs),Math.max(...lats)]],{padding:60,pitch:55,duration:800});
+          lt360DidInitialFit=true;
+        }
       }
     }
 
@@ -1456,6 +1456,7 @@ function resetView3D() {
   if(!map3d) return;
   const bounds=[];
   loadedFiles.forEach(f=>{ f.teams.forEach(t=>t.points.forEach(p=>bounds.push([p.lng,p.lat]))); f.cpPoints.forEach(p=>bounds.push([p.lng,p.lat])); });
+  if(lt360Active) lt360Pilots.forEach(p=>p.points.forEach(q=>bounds.push([q.lng,q.lat]))); // include live LT360 pilots
   if(bounds.length===0) return;
   const lngs=bounds.map(b=>b[0]),lats=bounds.map(b=>b[1]);
   map3d.fitBounds([[Math.min(...lngs),Math.min(...lats)],[Math.max(...lngs),Math.max(...lats)]],{padding:60,pitch:55,duration:800});
