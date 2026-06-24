@@ -1384,7 +1384,10 @@ function recalcTimeRange() {
     document.getElementById('slider').value=((currentTime-globalMin)/(globalMax-globalMin))*1000;
   } else {
     currentTime=null;
-    document.getElementById('time-range').textContent='GPXファイルを読み込むとタイムラインが表示されます';
+    const hasAnyTrack = loadedFiles.some(f=>f.teams.length>0||f.cpPoints.length>0);
+    document.getElementById('time-range').textContent = hasAnyTrack
+      ? '時刻なしGPX — 静的ルートとして表示中'
+      : 'GPXファイルを読み込むとタイムラインが表示されます';
     document.getElementById('current-time').textContent='--:--:--';
   }
 }
@@ -1393,34 +1396,51 @@ function fmt(d){ if(!d) return '--'; return d.toLocaleString('ja-JP',{month:'2-d
 // ================================================================
 // RENDER AT TIME
 // ================================================================
+function _teamHasTime(team) {
+  return team.points.some(p=>p.time&&!isNaN(p.time));
+}
+
 function renderAtTime(t) {
-  if(!t||!globalMin||!globalMax) return;
-  document.getElementById('current-time').textContent = fmt(t);
+  // static-only tracks (no time data) are drawn once in addParsedFile; skip here
+  if(t) document.getElementById('current-time').textContent = fmt(t);
   const elevData=[];
   loadedFiles.forEach(f=>f.teams.forEach(team=>{
-    const pts=team.points.filter(p=>p.time&&!isNaN(p.time)&&p.time<=t);
-    // 2D
-    team.visiblePts = pts;
-    if(pts.length===0){
-      team.polyline.setLatLngs([]);
+    const hasTime = _teamHasTime(team);
+    // time-less tracks: show all points as static route, no marker animation
+    let pts;
+    if(!hasTime) {
+      pts = team.points;
+      team.visiblePts = pts;
+      team.polyline.setLatLngs(pts.map(p=>[p.lat,p.lng]));
       if(map2d.hasLayer(team.markerLayer)) map2d.removeLayer(team.markerLayer);
     } else {
-      team.polyline.setLatLngs(pts.map(p=>[p.lat,p.lng]));
-      const last=pts[pts.length-1];
-      const prev=pts.length>1?pts[pts.length-2]:null;
-      if(prev){ team.bearing=calcBearing(prev,last); }
-      const isMoving=(last.spd||0)>0.3;
-      team.markerLayer.setLatLng([last.lat,last.lng]);
-      team.markerLayer.setIcon(teamMarkerIcon(team.color, team.bearing, isMoving));
-      if(!map2d.hasLayer(team.markerLayer)) team.markerLayer.addTo(map2d);
-      if(team.markerLayer.isPopupOpen()) team.markerLayer.setPopupContent(teamPopupHtml(team,pts,t));
+      if(!t||!globalMin||!globalMax){ team.visiblePts=[]; return; }
+      pts=team.points.filter(p=>p.time&&!isNaN(p.time)&&p.time<=t);
+      team.visiblePts = pts;
+    }
+    // 2D
+    if(hasTime) {
+      if(pts.length===0){
+        team.polyline.setLatLngs([]);
+        if(map2d.hasLayer(team.markerLayer)) map2d.removeLayer(team.markerLayer);
+      } else {
+        team.polyline.setLatLngs(pts.map(p=>[p.lat,p.lng]));
+        const last=pts[pts.length-1];
+        const prev=pts.length>1?pts[pts.length-2]:null;
+        if(prev){ team.bearing=calcBearing(prev,last); }
+        const isMoving=(last.spd||0)>0.3;
+        team.markerLayer.setLatLng([last.lat,last.lng]);
+        team.markerLayer.setIcon(teamMarkerIcon(team.color, team.bearing, isMoving));
+        if(!map2d.hasLayer(team.markerLayer)) team.markerLayer.addTo(map2d);
+        if(team.markerLayer.isPopupOpen()) team.markerLayer.setPopupContent(teamPopupHtml(team,pts,t));
+      }
     }
     // 3D
     if(currentMode==='3d'&&map3d&&map3dReady){
       const tid=`track-${team.uid}`, mid=`marker-${team.uid}`;
       try{
         if(map3d.getSource(tid)) map3d.getSource(tid).setData({type:'Feature',geometry:{type:'LineString',coordinates:pts.length>=2?pts.map(p=>[p.lng,p.lat]):[[0,0],[0,0]]}});
-        if(map3d.getSource(mid)) map3d.getSource(mid).setData({type:'FeatureCollection',features:pts.length>0?[{type:'Feature',geometry:{type:'Point',coordinates:[pts[pts.length-1].lng,pts[pts.length-1].lat]},properties:{}}]:[]});
+        if(map3d.getSource(mid)) map3d.getSource(mid).setData({type:'FeatureCollection',features:pts.length>0&&hasTime?[{type:'Feature',geometry:{type:'Point',coordinates:[pts[pts.length-1].lng,pts[pts.length-1].lat]},properties:{}}]:[]});
       }catch(e){}
     }
     if(team.hasEle){
