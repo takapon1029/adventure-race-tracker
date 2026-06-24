@@ -1283,13 +1283,15 @@ function addParsedFile(filename, parsed) {
   if(currentMode==='3d'&&map3d&&map3dReady) sync3DFromState();
   recalcTimeRange(); updateLegend(); updateFileList();
 
-  const bounds=[];
-  loadedFiles.forEach(f=>{ f.teams.forEach(t=>t.points.forEach(p=>bounds.push([p.lat,p.lng]))); f.cpPoints.forEach(p=>bounds.push([p.lat,p.lng])); });
-  if(bounds.length>0) {
-    if(currentMode==='2d') map2d.fitBounds(bounds,{padding:[30,30]});
-    else if(map3d&&map3dReady) { const lngs=bounds.map(b=>b[1]),lats=bounds.map(b=>b[0]); map3d.fitBounds([[Math.min(...lngs),Math.min(...lats)],[Math.max(...lngs),Math.max(...lats)]],{padding:40}); }
-  }
   renderAtTime(currentTime);
+  // Zoom to the newly added file after a tick (avoids being overridden by demo/other init)
+  const _eb=[];
+  entry.teams.forEach(t=>t.points.forEach(p=>_eb.push([p.lat,p.lng])));
+  entry.cpPoints.forEach(p=>_eb.push([p.lat,p.lng]));
+  if(_eb.length>0) setTimeout(()=>{
+    if(currentMode==='2d') map2d.fitBounds(_eb,{padding:[40,40],maxZoom:15});
+    else if(map3d&&map3dReady){ const lngs=_eb.map(b=>b[1]),lats=_eb.map(b=>b[0]); map3d.fitBounds([[Math.min(...lngs),Math.min(...lats)],[Math.max(...lngs),Math.max(...lats)]],{padding:40}); }
+  }, 50);
 }
 
 function removeTeam(fileId, teamName) {
@@ -1530,8 +1532,24 @@ function updateLegend(){
   el.innerHTML='<h3>チーム</h3>';
   const all=loadedFiles.flatMap(f=>f.teams.map(t=>({...t,fileId:f.id})));
   if(lt360Active) lt360Pilots.forEach(p=>all.push({name:`${p.name} 📡`,color:p.color,fileId:null,uid:p.uid,isLT360:true}));
-  if(all.length===0){
-    el.innerHTML+='<div style="color:#666;font-size:12px">なし</div>';
+
+  // Show waypoint-only files (no tracks) in legend
+  loadedFiles.forEach(f=>{
+    if(f.teams.length===0&&f.cpPoints.length>0){
+      const item=document.createElement('div'); item.className='legend-item';
+      item.style.cssText='justify-content:space-between;gap:4px;font-size:12px;color:var(--mut);';
+      item.innerHTML=`<span style="display:flex;align-items:center;gap:6px;min-width:0;flex:1">
+        <span style="color:#e74c3c;font-size:13px">●</span>
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${f.name}</span>
+        <span style="font-size:10px;opacity:.6">${f.cpPoints.length}pt</span>
+      </span>
+      <span class="team-remove" data-file-id="${f.id}" data-team-name="" style="cursor:pointer;opacity:.5;font-size:13px;flex-shrink:0" title="削除">✕</span>`;
+      el.appendChild(item);
+    }
+  });
+
+  if(all.length===0&&!loadedFiles.some(f=>f.cpPoints.length>0)){
+    el.innerHTML+='<div style="color:var(--mut);font-size:12px">なし</div>';
   } else {
     all.forEach(t=>{
       const isFollowed=followUid===t.uid;
@@ -1547,7 +1565,10 @@ function updateLegend(){
     el.querySelectorAll('.team-remove').forEach(btn=>{
       btn.addEventListener('mouseenter',()=>btn.style.opacity='1');
       btn.addEventListener('mouseleave',()=>btn.style.opacity='0.5');
-      btn.addEventListener('click',()=>removeTeam(parseFloat(btn.dataset.fileId),btn.dataset.teamName));
+      btn.addEventListener('click',()=>{
+        const fid=parseFloat(btn.dataset.fileId), name=btn.dataset.teamName;
+        if(name) removeTeam(fid, name); else removeFile(fid);
+      });
     });
     el.querySelectorAll('.leg-follow').forEach(btn=>{
       btn.addEventListener('click',()=>setFollow(parseInt(btn.dataset.uid)));
